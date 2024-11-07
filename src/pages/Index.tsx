@@ -55,7 +55,6 @@ const Index = () => {
 
   useEffect(() => {
     const initializeWallet = async () => {
-      // Try to load existing wallet data
       const savedWalletData = localStorage.getItem(WALLET_DATA_KEY);
       
       if (savedWalletData) {
@@ -63,11 +62,9 @@ const Index = () => {
         setSeedPhrase(savedSeedPhrase);
         setAddress(savedAddress);
       } else {
-        // Create new wallet if none exists
         const newSeedPhrase = generateSeedPhrase();
         const newAddress = generateBitcoinAddress(newSeedPhrase);
         
-        // Save wallet data
         localStorage.setItem(WALLET_DATA_KEY, JSON.stringify({
           address: newAddress,
           seedPhrase: newSeedPhrase
@@ -129,9 +126,9 @@ const Index = () => {
   };
 
   return (
-    <div className="h-screen bg-black p-6">
-      <div className="max-w-2xl mx-auto space-y-6">
-        <div className="flex justify-between items-center">
+    <div className="min-h-screen bg-black overflow-y-auto overscroll-y-contain -webkit-overflow-scrolling-touch">
+      <div className="max-w-2xl mx-auto p-6 space-y-6">
+        <div className="flex justify-between items-center sticky top-0 bg-black z-10 py-4">
           <h1 className="text-3xl font-heading font-bold text-primary">
             Bitcoin Cold Wallet
           </h1>
@@ -164,7 +161,7 @@ const Index = () => {
 
         <SeedPhrase words={seedPhrase} />
 
-        <p className="text-sm text-muted-foreground text-center">
+        <p className="text-sm text-muted-foreground text-center pb-6">
           ⚠️ Mantenha sua frase semente segura. Nunca compartilhe com ninguém.
         </p>
       </div>
