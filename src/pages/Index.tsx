@@ -26,19 +26,23 @@ const Index = () => {
   });
 
   // Fetch balance automatically
-  const { data: balance = 0, refetch: refetchBalance } = useQuery({
+  const { data: balance = 0, refetch: refetchBalance, error: balanceError } = useQuery({
     queryKey: ['balance', address],
     queryFn: () => getAddressBalance(address),
     enabled: !!address,
     refetchInterval: 30000, // Refresh every 30 seconds
-    onError: () => {
+  });
+
+  // Handle balance error
+  useEffect(() => {
+    if (balanceError) {
       toast({
         title: "Erro ao atualizar saldo",
         description: "Verifique sua conexão com a internet",
         variant: "destructive",
       });
-    },
-  });
+    }
+  }, [balanceError, toast]);
 
   useEffect(() => {
     const initializeWallet = async () => {
