@@ -5,26 +5,35 @@ import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
 import { LogIn, Key } from 'lucide-react';
 
-const Login = () => {
+const SignUp = () => {
   const [password, setPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleSignUp = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const storedPassword = localStorage.getItem('wallet-password');
-    
-    if (password === storedPassword) {
+    if (password !== confirmPassword) {
       toast({
-        title: "Login realizado com sucesso",
-        description: "Bem-vindo à sua carteira Bitcoin",
+        title: "Erro",
+        description: "As senhas não coincidem",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (password.length >= 8) {
+      localStorage.setItem('wallet-password', password);
+      toast({
+        title: "Senha cadastrada com sucesso",
+        description: "Sua carteira está protegida",
       });
       navigate('/');
     } else {
       toast({
-        title: "Senha incorreta",
-        description: "Por favor, verifique sua senha",
+        title: "Senha inválida",
+        description: "A senha deve ter pelo menos 8 caracteres",
         variant: "destructive",
       });
     }
@@ -35,15 +44,15 @@ const Login = () => {
       <div className="w-full max-w-md space-y-8">
         <div className="text-center">
           <h2 className="text-3xl font-heading font-bold text-primary">
-            Bitcoin Wallet
+            Criar Senha
           </h2>
           <p className="mt-2 text-muted-foreground">
-            Digite sua senha para acessar sua carteira
+            Crie uma senha para proteger sua carteira
           </p>
         </div>
 
-        <form onSubmit={handleLogin} className="mt-8 space-y-6">
-          <div className="space-y-2">
+        <form onSubmit={handleSignUp} className="mt-8 space-y-6">
+          <div className="space-y-4">
             <div className="relative">
               <Key className="absolute left-3 top-2.5 h-5 w-5 text-muted-foreground" />
               <Input
@@ -56,11 +65,23 @@ const Login = () => {
                 minLength={8}
               />
             </div>
+            <div className="relative">
+              <Key className="absolute left-3 top-2.5 h-5 w-5 text-muted-foreground" />
+              <Input
+                type="password"
+                placeholder="Confirme sua senha"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="pl-10"
+                required
+                minLength={8}
+              />
+            </div>
           </div>
 
           <Button type="submit" className="w-full" size="lg">
             <LogIn className="mr-2 h-4 w-4" />
-            Acessar Carteira
+            Criar Senha
           </Button>
         </form>
 
@@ -68,9 +89,9 @@ const Login = () => {
           <Button
             variant="link"
             className="text-primary"
-            onClick={() => navigate('/signup')}
+            onClick={() => navigate('/login')}
           >
-            Não tem uma senha? Criar senha
+            Já tem uma senha? Conecte-se
           </Button>
         </div>
 
@@ -82,4 +103,4 @@ const Login = () => {
   );
 };
 
-export default Login;
+export default SignUp;
