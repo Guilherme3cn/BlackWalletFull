@@ -29,7 +29,7 @@ const SignUp = () => {
         title: "Senha cadastrada com sucesso",
         description: "Sua carteira está protegida",
       });
-      navigate('/');
+      navigate('/wallet');
     } else {
       toast({
         title: "Senha inválida",
