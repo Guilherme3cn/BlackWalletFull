@@ -1,5 +1,4 @@
-import { Buffer } from 'buffer';
-import { sha256 } from 'crypto-js';
+import { enc } from 'crypto-js';
 
 const WORD_LIST = [
   "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse",
@@ -17,10 +16,13 @@ export const generateSeedPhrase = (): string[] => {
 };
 
 export const generateBitcoinAddress = (): string => {
-  // This is a simplified version - in production, use a proper Bitcoin library
-  const randomBytes = new Uint8Array(20);
-  crypto.getRandomValues(randomBytes);
-  return `bc1${Buffer.from(randomBytes).toString('hex')}`;
+  // Generate a random string that looks like a Bitcoin address
+  const characters = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let result = 'bc1';
+  for (let i = 0; i < 32; i++) {
+    result += characters.charAt(Math.floor(Math.random() * characters.length));
+  }
+  return result;
 };
 
 export const formatBitcoinAmount = (amount: number): string => {
