@@ -4,7 +4,7 @@ import WalletCard from '@/components/WalletCard';
 import SeedPhrase from '@/components/SeedPhrase';
 import { generateSeedPhrase, generateBitcoinAddress, getAddressBalance } from '@/utils/cryptoUtils';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, LogOut } from 'lucide-react';
+import { LogOut, RefreshCw } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useQuery } from '@tanstack/react-query';
 
@@ -31,10 +31,9 @@ const Index = () => {
         return null;
       }
     },
-    enabled: false, // Disable automatic fetching
+    enabled: false,
   });
 
-  // Fetch balance automatically
   const { data: balance = 0, refetch: refetchBalance, error: balanceError } = useQuery({
     queryKey: ['balance', address],
     queryFn: () => getAddressBalance(address),
@@ -104,21 +103,13 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-black p-6">
+    <div className="h-screen bg-black p-6">
       <div className="max-w-2xl mx-auto space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-3xl font-heading font-bold text-primary">
             Bitcoin Cold Wallet
           </h1>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={handleUpdateBtcPrice}
-              className="hover:text-primary"
-            >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Atualizar Preço
-            </Button>
             <Button
               variant="outline"
               onClick={regenerateWallet}
@@ -142,6 +133,7 @@ const Index = () => {
           address={address}
           balance={balance}
           usdValue={balance * (btcPrice || 0)}
+          onUpdatePrice={handleUpdateBtcPrice}
         />
 
         <SeedPhrase words={seedPhrase} />

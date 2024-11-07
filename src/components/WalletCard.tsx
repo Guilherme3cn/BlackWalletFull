@@ -1,16 +1,17 @@
 import React from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Copy, ExternalLink } from 'lucide-react';
+import { Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
 interface WalletCardProps {
   address: string;
   balance: number;
   usdValue: number;
+  onUpdatePrice: () => void;
 }
 
-const WalletCard = ({ address, balance, usdValue }: WalletCardProps) => {
+const WalletCard = ({ address, balance, usdValue, onUpdatePrice }: WalletCardProps) => {
   const { toast } = useToast();
 
   const copyAddress = () => {
@@ -25,14 +26,24 @@ const WalletCard = ({ address, balance, usdValue }: WalletCardProps) => {
     <Card className="wallet-card p-6 space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-heading font-semibold text-primary">Cold Wallet</h2>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="hover:text-primary"
-          onClick={() => window.open(`https://mempool.space/address/${address}`, '_blank')}
-        >
-          <ExternalLink className="h-5 w-5" />
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="hover:text-primary"
+            onClick={onUpdatePrice}
+          >
+            <RefreshCw className="h-5 w-5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="hover:text-primary"
+            onClick={() => window.open(`https://mempool.space/address/${address}`, '_blank')}
+          >
+            <ExternalLink className="h-5 w-5" />
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-2">
