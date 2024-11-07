@@ -11,7 +11,6 @@ import { useQuery } from '@tanstack/react-query';
 const Index = () => {
   const [address, setAddress] = useState('');
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
-  const [balance, setBalance] = useState(0);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -26,17 +25,27 @@ const Index = () => {
     refetchInterval: 60000, // Refresh every minute
   });
 
+  // Fetch balance automatically
+  const { data: balance = 0, refetch: refetchBalance } = useQuery({
+    queryKey: ['balance', address],
+    queryFn: () => getAddressBalance(address),
+    enabled: !!address,
+    refetchInterval: 30000, // Refresh every 30 seconds
+    onError: () => {
+      toast({
+        title: "Erro ao atualizar saldo",
+        description: "Verifique sua conexão com a internet",
+        variant: "destructive",
+      });
+    },
+  });
+
   useEffect(() => {
     const initializeWallet = async () => {
       const newSeedPhrase = generateSeedPhrase();
       setSeedPhrase(newSeedPhrase);
       const newAddress = generateBitcoinAddress(newSeedPhrase);
       setAddress(newAddress);
-      
-      if (newAddress) {
-        const newBalance = await getAddressBalance(newAddress);
-        setBalance(newBalance);
-      }
     };
 
     initializeWallet();
@@ -47,11 +56,7 @@ const Index = () => {
     setSeedPhrase(newSeedPhrase);
     const newAddress = generateBitcoinAddress(newSeedPhrase);
     setAddress(newAddress);
-    
-    if (newAddress) {
-      const newBalance = await getAddressBalance(newAddress);
-      setBalance(newBalance);
-    }
+    await refetchBalance();
 
     toast({
       title: "Nova carteira gerada",
