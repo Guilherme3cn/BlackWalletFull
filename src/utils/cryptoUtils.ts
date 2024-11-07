@@ -4,6 +4,12 @@ import { ECPairFactory } from 'ecpair';
 import { BIP32Factory } from 'bip32';
 import * as ecc from '@bitcoinerlab/secp256k1';
 
+// Add Buffer polyfill for browser environment
+import { Buffer } from 'buffer';
+if (typeof window !== 'undefined') {
+  window.Buffer = Buffer;
+}
+
 const ECPair = ECPairFactory(ecc);
 const bip32 = BIP32Factory(ecc);
 const network = bitcoin.networks.bitcoin; // Use testnet for testing: bitcoin.networks.testnet
