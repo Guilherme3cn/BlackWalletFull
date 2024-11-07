@@ -16,11 +16,12 @@ const Login = () => {
     const storedPassword = localStorage.getItem('wallet-password');
     
     if (password === storedPassword) {
+      localStorage.setItem('wallet-password', password); // Ensure password is stored
       toast({
         title: "Login realizado com sucesso",
         description: "Bem-vindo à sua carteira Bitcoin",
       });
-      navigate('/');
+      navigate('/', { replace: true });
     } else {
       toast({
         title: "Senha incorreta",
