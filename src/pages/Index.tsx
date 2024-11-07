@@ -14,7 +14,7 @@ const Index = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Fetch BTC price using CoinGecko API with 1-hour refetch interval
+  // Fetch BTC price using CoinGecko API
   const { data: btcPrice, refetch: refetchBtcPrice } = useQuery({
     queryKey: ['btcPrice'],
     queryFn: async () => {
@@ -31,8 +31,7 @@ const Index = () => {
         return null;
       }
     },
-    refetchInterval: 3600000, // Refresh every hour (3,600,000 milliseconds)
-    refetchIntervalInBackground: true, // Continue refetching even if app is in background
+    enabled: false, // Disable automatic fetching
   });
 
   // Fetch balance automatically
@@ -65,13 +64,29 @@ const Index = () => {
     initializeWallet();
   }, []);
 
+  const handleUpdateBtcPrice = async () => {
+    try {
+      await refetchBtcPrice();
+      toast({
+        title: "Preço do Bitcoin atualizado",
+        description: "O valor foi atualizado com sucesso",
+      });
+    } catch (error) {
+      toast({
+        title: "Erro ao atualizar preço",
+        description: "Verifique sua conexão com a internet",
+        variant: "destructive",
+      });
+    }
+  };
+
   const regenerateWallet = async () => {
     const newSeedPhrase = generateSeedPhrase();
     setSeedPhrase(newSeedPhrase);
     const newAddress = generateBitcoinAddress(newSeedPhrase);
     setAddress(newAddress);
     await refetchBalance();
-    await refetchBtcPrice(); // Also refetch BTC price when regenerating wallet
+    await refetchBtcPrice();
 
     toast({
       title: "Nova carteira gerada",
@@ -96,6 +111,14 @@ const Index = () => {
             Bitcoin Cold Wallet
           </h1>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={handleUpdateBtcPrice}
+              className="hover:text-primary"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Atualizar Preço
+            </Button>
             <Button
               variant="outline"
               onClick={regenerateWallet}
