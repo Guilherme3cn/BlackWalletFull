@@ -1,9 +1,11 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as bip39 from 'bip39';
 import { ECPairFactory } from 'ecpair';
-import * as ecc from 'tiny-secp256k1';
+import { BIP32Factory } from 'bip32';
+import * as ecc from '@bitcoinerlab/secp256k1';
 
 const ECPair = ECPairFactory(ecc);
+const bip32 = BIP32Factory(ecc);
 const network = bitcoin.networks.bitcoin; // Use testnet for testing: bitcoin.networks.testnet
 
 // Generate real mnemonic (seed phrase)
@@ -19,7 +21,7 @@ export const generateBitcoinAddress = (seedPhrase: string[]): string => {
     const seed = bip39.mnemonicToSeedSync(mnemonic);
     
     // Derive the key pair using BIP84 (Native SegWit)
-    const root = bitcoin.bip32.fromSeed(seed, network);
+    const root = bip32.fromSeed(seed, network);
     const path = `m/84'/0'/0'/0/0`; // First receiving address
     const child = root.derivePath(path);
     
@@ -58,7 +60,7 @@ export const signTransaction = async (
   try {
     const mnemonic = seedPhrase.join(' ');
     const seed = bip39.mnemonicToSeedSync(mnemonic);
-    const root = bitcoin.bip32.fromSeed(seed, network);
+    const root = bip32.fromSeed(seed, network);
     const path = `m/84'/0'/0'/0/0`;
     const child = root.derivePath(path);
     const keyPair = ECPair.fromPrivateKey(child.privateKey!);
