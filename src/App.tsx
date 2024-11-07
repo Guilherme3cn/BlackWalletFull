@@ -6,7 +6,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import SignUp from "./pages/SignUp";
-import { useEffect } from "react";
 
 const queryClient = new QueryClient();
 
@@ -14,14 +13,13 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const isAuthenticated = localStorage.getItem('wallet-password');
   
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/signup" replace />;
   }
 
   return <>{children}</>;
 };
 
 const App = () => {
-  // Check if user is already authenticated
   const isAuthenticated = localStorage.getItem('wallet-password');
 
   return (
@@ -32,19 +30,19 @@ const App = () => {
         <BrowserRouter>
           <Routes>
             <Route 
-              path="/signup" 
+              path="/" 
               element={
-                isAuthenticated ? <Navigate to="/" replace /> : <SignUp />
+                isAuthenticated ? <Navigate to="/wallet" replace /> : <SignUp />
               } 
             />
             <Route 
               path="/login" 
               element={
-                isAuthenticated ? <Navigate to="/" replace /> : <Login />
+                isAuthenticated ? <Navigate to="/wallet" replace /> : <Login />
               } 
             />
             <Route
-              path="/"
+              path="/wallet"
               element={
                 <ProtectedRoute>
                   <Index />
