@@ -14,15 +14,25 @@ const Index = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Fetch BTC price using CoinGecko API
-  const { data: btcPrice } = useQuery({
+  // Fetch BTC price using CoinGecko API with 1-hour refetch interval
+  const { data: btcPrice, refetch: refetchBtcPrice } = useQuery({
     queryKey: ['btcPrice'],
     queryFn: async () => {
-      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-      const data = await response.json();
-      return data.bitcoin.usd;
+      try {
+        const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+        const data = await response.json();
+        return data.bitcoin.usd;
+      } catch (error) {
+        toast({
+          title: "Erro ao atualizar preço do Bitcoin",
+          description: "Verifique sua conexão com a internet",
+          variant: "destructive",
+        });
+        return null;
+      }
     },
-    refetchInterval: 60000, // Refresh every minute
+    refetchInterval: 3600000, // Refresh every hour (3,600,000 milliseconds)
+    refetchIntervalInBackground: true, // Continue refetching even if app is in background
   });
 
   // Fetch balance automatically
@@ -61,6 +71,7 @@ const Index = () => {
     const newAddress = generateBitcoinAddress(newSeedPhrase);
     setAddress(newAddress);
     await refetchBalance();
+    await refetchBtcPrice(); // Also refetch BTC price when regenerating wallet
 
     toast({
       title: "Nova carteira gerada",
