@@ -8,13 +8,14 @@ import { LogOut, RefreshCw } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { useQuery } from '@tanstack/react-query';
 
+const WALLET_DATA_KEY = 'bitcoin-wallet-data';
+
 const Index = () => {
   const [address, setAddress] = useState('');
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Fetch BTC price using CoinGecko API
   const { data: btcPrice, refetch: refetchBtcPrice } = useQuery({
     queryKey: ['btcPrice'],
     queryFn: async () => {
@@ -38,7 +39,7 @@ const Index = () => {
     queryKey: ['balance', address],
     queryFn: () => getAddressBalance(address),
     enabled: !!address,
-    refetchInterval: 30000, // Refresh every 30 seconds
+    refetchInterval: 30000,
   });
 
   // Handle balance error
@@ -54,10 +55,27 @@ const Index = () => {
 
   useEffect(() => {
     const initializeWallet = async () => {
-      const newSeedPhrase = generateSeedPhrase();
-      setSeedPhrase(newSeedPhrase);
-      const newAddress = generateBitcoinAddress(newSeedPhrase);
-      setAddress(newAddress);
+      // Try to load existing wallet data
+      const savedWalletData = localStorage.getItem(WALLET_DATA_KEY);
+      
+      if (savedWalletData) {
+        const { address: savedAddress, seedPhrase: savedSeedPhrase } = JSON.parse(savedWalletData);
+        setSeedPhrase(savedSeedPhrase);
+        setAddress(savedAddress);
+      } else {
+        // Create new wallet if none exists
+        const newSeedPhrase = generateSeedPhrase();
+        const newAddress = generateBitcoinAddress(newSeedPhrase);
+        
+        // Save wallet data
+        localStorage.setItem(WALLET_DATA_KEY, JSON.stringify({
+          address: newAddress,
+          seedPhrase: newSeedPhrase
+        }));
+        
+        setSeedPhrase(newSeedPhrase);
+        setAddress(newAddress);
+      }
     };
 
     initializeWallet();
@@ -81,8 +99,15 @@ const Index = () => {
 
   const regenerateWallet = async () => {
     const newSeedPhrase = generateSeedPhrase();
-    setSeedPhrase(newSeedPhrase);
     const newAddress = generateBitcoinAddress(newSeedPhrase);
+    
+    // Save new wallet data
+    localStorage.setItem(WALLET_DATA_KEY, JSON.stringify({
+      address: newAddress,
+      seedPhrase: newSeedPhrase
+    }));
+    
+    setSeedPhrase(newSeedPhrase);
     setAddress(newAddress);
     await refetchBalance();
     await refetchBtcPrice();
@@ -95,6 +120,7 @@ const Index = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('wallet-password');
+    localStorage.removeItem(WALLET_DATA_KEY);
     toast({
       title: "Logout realizado",
       description: "Você foi desconectado da sua carteira",
