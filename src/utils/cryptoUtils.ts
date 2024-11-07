@@ -1,28 +1,83 @@
-import { enc } from 'crypto-js';
+import * as bitcoin from 'bitcoinjs-lib';
+import * as bip39 from 'bip39';
+import { ECPairFactory } from 'ecpair';
+import * as ecc from 'tiny-secp256k1';
 
-const WORD_LIST = [
-  "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd", "abuse",
-  "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire", "across", "act",
-  // ... more words would be here in a real implementation
-];
+const ECPair = ECPairFactory(ecc);
+const network = bitcoin.networks.bitcoin; // Use testnet for testing: bitcoin.networks.testnet
 
+// Generate real mnemonic (seed phrase)
 export const generateSeedPhrase = (): string[] => {
-  const words: string[] = [];
-  for (let i = 0; i < 12; i++) {
-    const randomIndex = Math.floor(Math.random() * WORD_LIST.length);
-    words.push(WORD_LIST[randomIndex]);
-  }
-  return words;
+  const mnemonic = bip39.generateMnemonic();
+  return mnemonic.split(' ');
 };
 
-export const generateBitcoinAddress = (): string => {
-  // Generate a random string that looks like a Bitcoin address
-  const characters = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  let result = 'bc1';
-  for (let i = 0; i < 32; i++) {
-    result += characters.charAt(Math.floor(Math.random() * characters.length));
+// Generate Bitcoin address from seed phrase
+export const generateBitcoinAddress = (seedPhrase: string[]): string => {
+  try {
+    const mnemonic = seedPhrase.join(' ');
+    const seed = bip39.mnemonicToSeedSync(mnemonic);
+    
+    // Derive the key pair using BIP84 (Native SegWit)
+    const root = bitcoin.bip32.fromSeed(seed, network);
+    const path = `m/84'/0'/0'/0/0`; // First receiving address
+    const child = root.derivePath(path);
+    
+    // Generate Native SegWit address
+    const { address } = bitcoin.payments.p2wpkh({
+      pubkey: child.publicKey,
+      network,
+    });
+
+    return address || '';
+  } catch (error) {
+    console.error('Error generating Bitcoin address:', error);
+    return '';
   }
-  return result;
+};
+
+// Get balance from address using Blockstream API
+export const getAddressBalance = async (address: string): Promise<number> => {
+  try {
+    const response = await fetch(`https://blockstream.info/api/address/${address}`);
+    const data = await response.json();
+    return data.chain_stats.funded_txo_sum / 100000000; // Convert satoshis to BTC
+  } catch (error) {
+    console.error('Error fetching balance:', error);
+    return 0;
+  }
+};
+
+// Sign a Bitcoin transaction
+export const signTransaction = async (
+  seedPhrase: string[],
+  toAddress: string,
+  amount: number,
+  fee: number
+): Promise<string> => {
+  try {
+    const mnemonic = seedPhrase.join(' ');
+    const seed = bip39.mnemonicToSeedSync(mnemonic);
+    const root = bitcoin.bip32.fromSeed(seed, network);
+    const path = `m/84'/0'/0'/0/0`;
+    const child = root.derivePath(path);
+    const keyPair = ECPair.fromPrivateKey(child.privateKey!);
+
+    // Create transaction (simplified version)
+    const psbt = new bitcoin.Psbt({ network });
+    
+    // Add inputs and outputs (this is simplified - in reality, you need to fetch UTXOs)
+    // psbt.addInput(...)
+    // psbt.addOutput(...)
+    
+    psbt.signAllInputs(keyPair);
+    psbt.finalizeAllInputs();
+    
+    return psbt.extractTransaction().toHex();
+  } catch (error) {
+    console.error('Error signing transaction:', error);
+    throw new Error('Failed to sign transaction');
+  }
 };
 
 export const formatBitcoinAmount = (amount: number): string => {

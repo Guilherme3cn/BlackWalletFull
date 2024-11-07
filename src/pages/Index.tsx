@@ -2,28 +2,61 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import WalletCard from '@/components/WalletCard';
 import SeedPhrase from '@/components/SeedPhrase';
-import { generateSeedPhrase, generateBitcoinAddress } from '@/utils/cryptoUtils';
+import { generateSeedPhrase, generateBitcoinAddress, getAddressBalance } from '@/utils/cryptoUtils';
 import { Button } from '@/components/ui/button';
 import { RefreshCw, LogOut } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { useQuery } from '@tanstack/react-query';
 
 const Index = () => {
   const [address, setAddress] = useState('');
   const [seedPhrase, setSeedPhrase] = useState<string[]>([]);
-  const [balance] = useState(0); // In a real app, this would be fetched
-  const [usdPrice] = useState(43000); // In a real app, this would be fetched
+  const [balance, setBalance] = useState(0);
   const navigate = useNavigate();
   const { toast } = useToast();
 
+  // Fetch BTC price using CoinGecko API
+  const { data: btcPrice } = useQuery({
+    queryKey: ['btcPrice'],
+    queryFn: async () => {
+      const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      const data = await response.json();
+      return data.bitcoin.usd;
+    },
+    refetchInterval: 60000, // Refresh every minute
+  });
+
   useEffect(() => {
-    // Generate new wallet on first load
-    setAddress(generateBitcoinAddress());
-    setSeedPhrase(generateSeedPhrase());
+    const initializeWallet = async () => {
+      const newSeedPhrase = generateSeedPhrase();
+      setSeedPhrase(newSeedPhrase);
+      const newAddress = generateBitcoinAddress(newSeedPhrase);
+      setAddress(newAddress);
+      
+      if (newAddress) {
+        const newBalance = await getAddressBalance(newAddress);
+        setBalance(newBalance);
+      }
+    };
+
+    initializeWallet();
   }, []);
 
-  const regenerateWallet = () => {
-    setAddress(generateBitcoinAddress());
-    setSeedPhrase(generateSeedPhrase());
+  const regenerateWallet = async () => {
+    const newSeedPhrase = generateSeedPhrase();
+    setSeedPhrase(newSeedPhrase);
+    const newAddress = generateBitcoinAddress(newSeedPhrase);
+    setAddress(newAddress);
+    
+    if (newAddress) {
+      const newBalance = await getAddressBalance(newAddress);
+      setBalance(newBalance);
+    }
+
+    toast({
+      title: "Nova carteira gerada",
+      description: "Guarde sua frase semente em um local seguro!",
+    });
   };
 
   const handleLogout = () => {
@@ -65,7 +98,7 @@ const Index = () => {
         <WalletCard
           address={address}
           balance={balance}
-          usdValue={balance * usdPrice}
+          usdValue={balance * (btcPrice || 0)}
         />
 
         <SeedPhrase words={seedPhrase} />
