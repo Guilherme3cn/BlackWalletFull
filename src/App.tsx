@@ -13,7 +13,7 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const isAuthenticated = localStorage.getItem('wallet-password');
   
   if (!isAuthenticated) {
-    return <Navigate to="/signup" replace />;
+    return <Navigate to="/login" replace />;
   }
 
   return <>{children}</>;
@@ -32,13 +32,13 @@ const App = () => {
             <Route 
               path="/" 
               element={
-                isAuthenticated ? <Navigate to="/wallet" replace /> : <SignUp />
+                isAuthenticated ? <Navigate to="/wallet" replace /> : <Login />
               } 
             />
             <Route 
-              path="/login" 
+              path="/signup" 
               element={
-                isAuthenticated ? <Navigate to="/wallet" replace /> : <Login />
+                isAuthenticated ? <Navigate to="/wallet" replace /> : <SignUp />
               } 
             />
             <Route
