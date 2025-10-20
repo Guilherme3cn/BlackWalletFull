@@ -1,0 +1,90 @@
+import { StyleSheet } from 'react-native';
+import { colors, radius, spacing, typography } from '../theme/colors';
+
+export const homeStyles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+  },
+  container: {
+    paddingVertical: spacing.lg,
+    gap: spacing.lg,
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    color: colors.mutedForeground,
+    fontSize: typography.body,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+  },
+  heading: {
+    color: colors.primary,
+    fontSize: typography.title,
+    fontWeight: '700',
+  },
+  headingSubtitle: {
+    color: colors.mutedForeground,
+    marginTop: spacing.xs,
+    fontSize: typography.small,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
+  headerButton: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: 'transparent',
+  },
+  headerButtonText: {
+    color: colors.primary,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  outlineButton: {
+    backgroundColor: 'transparent',
+  },
+  dangerButton: {
+    borderColor: '#ffd000ff',
+    backgroundColor: '#ffd000ff',
+  },
+  dangerButtonText: {
+    color: '#000000', 
+  },
+  disclaimer: {
+    textAlign: 'center',
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
+  feedback: {
+    padding: spacing.md,
+    borderRadius: radius.md,
+  },
+  feedbackSuccess: {
+    backgroundColor: '#14532d',
+  },
+  feedbackError: {
+    backgroundColor: '#dacd1bff',
+  },
+  feedbackText: {
+    color: colors.foreground,
+    textAlign: 'center',
+    fontSize: typography.small,
+  },
+});

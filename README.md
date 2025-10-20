@@ -1,71 +1,46 @@
-# Welcome to your GPT Engineer project
+# BlackVault Wallet (Expo)
 
-## Project info
+Aplicativo mobile construido com Expo e React Native para gerenciamento de uma cold wallet Bitcoin diretamente no dispositivo.
 
-**URL**: https://run.gptengineer.app/projects/02ced871-21c0-4c79-9f83-2a75ec4f82e2/improve
+## Principais recursos
 
-## How can I edit this code?
+- Gera frases BIP39 e deriva enderecos SegWit (BIP84) localmente.
+- Consulta saldo on-chain pela API da Blockstream e converte para USD utilizando dados da CoinGecko.
+- Exibe informacoes da carteira em layout otimizado para dispositivos moveis.
+- Permite ocultar ou compartilhar a frase semente e regenerar a carteira com um toque.
+- Recupera uma carteira existente a partir da frase semente diretamente pela tela de login.
 
-There are several ways of editing your application.
+## Stack
 
-**Use GPT Engineer**
+- Expo SDK 51 (React Native 0.74)
+- React Navigation (stack nativo)
+- AsyncStorage para persistencia local
+- Bibliotecas @scure para operacoes com Bitcoin (BIP32/BIP39)
 
-Simply visit the GPT Engineer project at [GPT Engineer](https://gptengineer.app/projects/02ced871-21c0-4c79-9f83-2a75ec4f82e2/improve) and start prompting.
-
-Changes made via gptengineer.app will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in the GPT Engineer UI.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Como executar
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
+npm install
+npm start
 ```
 
-**Edit a file directly in GitHub**
+O comando `npm start` abre o Expo CLI, permitindo rodar no Expo Go (Android/iOS) ou emulador. Tambem estao disponiveis:
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```sh
+npm run android   # build nativo ou Expo Go (Android)
+npm run ios       # build nativo ou Expo Go (iOS)
+npm run web       # executa com Expo Web
+```
 
-**Use GitHub Codespaces**
+## Estrutura de pastas
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+- `App.js`: ponto de entrada com React Navigation.
+- `src/screens`: telas de Login, SignUp e Home.
+- `src/components`: componentes reutilizaveis (WalletCard, SeedPhrase).
+- `src/utils/crypto.js`: funcoes para gerar frase semente, derivar endereco e consultar saldo.
+- `src/theme`: tokens de estilos compartilhados.
 
-## What technologies are used for this project?
+## Observacoes
 
-This project is built with .
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-All GPT Engineer projects can be deployed directly via the GPT Engineer app.
-
-Simply visit your project at [GPT Engineer](https://gptengineer.app/projects/02ced871-21c0-4c79-9f83-2a75ec4f82e2/improve) and click on Share -> Publish.
-
-## I want to use a custom domain - is that possible?
-
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.gptengineer.app/tips-tricks/custom-domain/)
+- Este projeto e totalmente mobile; configuracoes e arquivos do antigo app web foram removidos.
+- Antes de liberar em producao, execute `expo prebuild` se precisar gerar projetos nativos para lojas.
