@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
@@ -41,11 +41,44 @@ const HomeScreen = ({ navigation }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [generatingWallet, setGeneratingWallet] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [receiveModalVisible, setReceiveModalVisible] = useState(false);
   const didToggleRef = useRef(false);
 
   const handleToggleConnection = useCallback(() => {
     setIsOnline((prev) => !prev);
   }, []);
+
+  const handleSendBitcoin = useCallback(() => {
+    if (!isOnline) {
+      showFeedback('error', 'Ative o modo online para enviar BTC.');
+      return;
+    }
+
+    if (!address) {
+      showFeedback('error', 'Endereco da carteira indisponivel.');
+      return;
+    }
+
+    Alert.alert('Enviar BTC', 'Funcionalidade de envio de BTC em desenvolvimento.');
+  }, [address, isOnline, showFeedback]);
+
+  const handleReceiveBitcoin = useCallback(() => {
+    if (!address) {
+      showFeedback('error', 'Endereco da carteira indisponivel.');
+      return;
+    }
+
+    setReceiveModalVisible(true);
+  }, [address]);
+
+  const qrCodeUri = useMemo(() => {
+    if (!address) {
+      return null;
+    }
+
+    const encoded = encodeURIComponent(address);
+    return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encoded}`;
+  }, [address]);
 
   const usdValue = useMemo(() => {
     if (!btcPrice) {
@@ -289,10 +322,29 @@ const HomeScreen = ({ navigation }) => {
           onRefreshPrice={refreshBtcPrice}
         />
 
+        <View style={styles.quickActions}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[styles.quickActionButton, styles.sendButton]}
+            onPress={handleSendBitcoin}
+          >
+            <Feather name="arrow-up-right" size={18} color={colors.primaryText} style={styles.quickActionIcon} />
+            <Text style={styles.quickActionText}>Enviar BTC</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[styles.quickActionButton, styles.receiveButton]}
+            onPress={handleReceiveBitcoin}
+          >
+            <Feather name="arrow-down-left" size={18} color={colors.primary} style={styles.quickActionIcon} />
+            <Text style={styles.quickActionTextSecondary}>Receber BTC</Text>
+          </TouchableOpacity>
+        </View>
+
         <SeedPhrase words={seedPhrase} />
 
         <Text style={styles.disclaimer}>
-          ATENCAO: Mantenha sua frase semente em seguranca. Nunca compartilhe com terceiros.
+          ATENCAO: Mantenha sua frase semente em segurança. Nunca compartilhe com terceiros.
         </Text>
 
         {priceRefreshing ? <Text style={styles.loadingText}>Atualizando preco...</Text> : null}
@@ -350,6 +402,33 @@ const HomeScreen = ({ navigation }) => {
         </Text>
       </View>
     ) : null}
+      <Modal
+        visible={receiveModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReceiveModalVisible(false)}
+      >
+        <View style={styles.receiveModalBackdrop}>
+          <View style={styles.receiveModalCard}>
+            <Text style={styles.receiveModalTitle}>Receber BTC</Text>
+            {qrCodeUri ? (
+              <Image source={{ uri: qrCodeUri }} style={styles.receiveModalQr} resizeMode="contain" />
+            ) : (
+              <Text style={styles.receiveModalFallback}>Endereco da carteira indisponivel.</Text>
+            )}
+            <Text style={styles.receiveModalAddress} selectable>
+              {address}
+            </Text>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.receiveModalClose}
+              onPress={() => setReceiveModalVisible(false)}
+            >
+              <Text style={styles.receiveModalCloseText}>Fechar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
