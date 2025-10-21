@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, Share, Alert } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { seedPhraseStyles as styles } from '../styles/seedPhraseStyles';
 
 const HIDDEN_WORD = '********';
@@ -34,11 +35,25 @@ const SeedPhrase = ({ words = [] }) => {
           <Text style={styles.subtitle}>Guarde em um local seguro e offline</Text>
         </View>
         <View style={styles.actions}>
-          <TouchableOpacity onPress={handleToggleVisibility} activeOpacity={0.8} style={styles.iconButton}>
-            <Text style={styles.iconText}>{isVisible ? 'NOT' : 'VER'}</Text>
+          <TouchableOpacity
+            onPress={handleToggleVisibility}
+            activeOpacity={0.8}
+            style={styles.iconButton}
+            accessibilityLabel={isVisible ? 'Ocultar frase semente' : 'Mostrar frase semente'}
+          >
+            <Feather
+              name={isVisible ? 'eye-off' : 'eye'}
+              size={20}
+              color={styles.iconText.color}
+            />
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleShareSeed} activeOpacity={0.8} style={styles.iconButton}>
-            <Text style={styles.iconText}>TXT</Text>
+          <TouchableOpacity
+            onPress={handleShareSeed}
+            activeOpacity={0.8}
+            style={styles.iconButton}
+            accessibilityLabel="Exportar frase semente como texto"
+          >
+            <Feather name="folder" size={20} color={styles.iconText.color} />
           </TouchableOpacity>
         </View>
       </View>
@@ -53,7 +68,7 @@ const SeedPhrase = ({ words = [] }) => {
       </View>
 
       {!isVisible ? (
-        <Text style={styles.hint}>Toque no botao VER para revelar a frase semente completa.</Text>
+        <Text style={styles.hint}>Toque no icone de olho para revelar a frase semente completa.</Text>
       ) : null}
     </View>
   );

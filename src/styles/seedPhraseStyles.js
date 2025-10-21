@@ -35,6 +35,9 @@ export const seedPhraseStyles = StyleSheet.create({
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
+    marginStart: -20,
+    marginTop: -40,
+    marginEnd: 20
   },
   iconText: {
     fontSize: typography.body,

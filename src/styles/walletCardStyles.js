@@ -29,12 +29,15 @@ export const walletCardStyles = StyleSheet.create({
     gap: spacing.sm,
   },
   iconButton: {
-    width: 36,
-    height: 36,
+    width: 45,
+    height: 40,
     borderRadius: radius.sm,
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
+    marginStart: -30,
+    marginTop: -40,
+    marginEnd: 30
   },
   iconText: {
     color: colors.primary,
