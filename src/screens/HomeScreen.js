@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
@@ -37,7 +37,8 @@ const HomeScreen = ({ navigation }) => {
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [feedback, setFeedback] = useState(null);
-  const [isOnline, setIsOnline] = useState(true);
+  const [isOnline, setIsOnline] = useState(false);
+  const didToggleRef = useRef(false);
 
   const handleToggleConnection = useCallback(() => {
     setIsOnline((prev) => !prev);
@@ -51,13 +52,13 @@ const HomeScreen = ({ navigation }) => {
     return balance * btcPrice;
   }, [balance, btcPrice]);
 
-  const showFeedback = (type, message) => {
+  const showFeedback = useCallback((type, message) => {
     setFeedback({ type, message, timestamp: Date.now() });
-  };
+  }, []);
 
   const fetchBalance = useCallback(
     async (targetAddress = address) => {
-      if (!targetAddress) {
+      if (!targetAddress || !isOnline) {
         return;
       }
 
@@ -68,10 +69,15 @@ const HomeScreen = ({ navigation }) => {
         showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
       }
     },
-    [address],
+    [address, isOnline, showFeedback],
   );
 
   const refreshBtcPrice = useCallback(async () => {
+    if (!isOnline) {
+      showFeedback('error', 'Ative o modo online para atualizar o preco do Bitcoin.');
+      return;
+    }
+
     try {
       setPriceRefreshing(true);
       const price = await fetchBtcUsdPrice();
@@ -82,7 +88,7 @@ const HomeScreen = ({ navigation }) => {
     } finally {
       setPriceRefreshing(false);
     }
-  }, []);
+  }, [isOnline, showFeedback]);
 
   const regenerateWallet = useCallback(
     async (skipFeedback = false) => {
@@ -109,7 +115,7 @@ const HomeScreen = ({ navigation }) => {
         console.error('Erro ao gerar carteira', error);
       }
     },
-    [fetchBalance],
+    [fetchBalance, showFeedback],
   );
 
   const loadWalletFromStorage = useCallback(async () => {
@@ -157,7 +163,7 @@ const HomeScreen = ({ navigation }) => {
   }, [loadWalletFromStorage, navigation]);
 
   useEffect(() => {
-    if (!address) {
+    if (!address || !isOnline) {
       return;
     }
 
@@ -168,11 +174,25 @@ const HomeScreen = ({ navigation }) => {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [address, fetchBalance]);
+  }, [address, fetchBalance, isOnline]);
 
   useEffect(() => {
-    refreshBtcPrice();
-  }, [refreshBtcPrice]);
+    if (!didToggleRef.current) {
+      return;
+    }
+
+    if (isOnline) {
+      showFeedback('success', 'Modo online ativado. Atualizando dados...');
+      fetchBalance();
+      refreshBtcPrice();
+    } else {
+      showFeedback('info', 'Modo offline ativado. Atualizacao de dados desabilitada.');
+    }
+  }, [isOnline, fetchBalance, refreshBtcPrice, showFeedback]);
+
+  useEffect(() => {
+    didToggleRef.current = true;
+  }, []);
 
   useEffect(() => {
     if (!feedback) {
