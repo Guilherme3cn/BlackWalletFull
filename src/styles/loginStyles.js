@@ -5,17 +5,32 @@ export const loginStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
+  },
+  keyboard: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
   container: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
+  content: {
     flex: 1,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
     justifyContent: 'center',
     gap: spacing.lg,
   },
   header: {
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  logo: {
+    width: 200,
+    height: 200,
+    resizeMode: 'contain',
+    alignSelf: 'center',
+    
   },
   title: {
     color: colors.primary,
@@ -26,9 +41,11 @@ export const loginStyles = StyleSheet.create({
     color: colors.mutedForeground,
     fontSize: typography.body,
     textAlign: 'center',
+    marginBottom: 20,
   },
   form: {
     gap: spacing.sm,
+    marginBottom: 20,
   },
   label: {
     color: colors.foreground,
@@ -44,11 +61,13 @@ export const loginStyles = StyleSheet.create({
     borderColor: colors.muted,
   },
   primaryButton: {
-    marginTop: spacing.md,
     backgroundColor: colors.primary,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
     alignItems: 'center',
+    marginTop: 10,
+    height: 40,
+    
   },
   primaryButtonText: {
     color: colors.primaryText,
@@ -59,12 +78,16 @@ export const loginStyles = StyleSheet.create({
     color: colors.primary,
     textAlign: 'center',
     fontSize: typography.body,
-    fontWeight: '600',
+    fontWeight: '500',
+    marginTop: 10,
+    
   },
   helperText: {
     color: colors.mutedForeground,
     textAlign: 'center',
     fontSize: typography.small,
     marginTop: spacing.sm,
+    fontWeight: '300',
   },
 });
+

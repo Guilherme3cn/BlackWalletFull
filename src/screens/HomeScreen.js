@@ -139,7 +139,7 @@ const HomeScreen = ({ navigation }) => {
         setLoadingWallet(false);
         navigation.reset({
           index: 0,
-          routes: [{ name: 'SignUp' }],
+          routes: [{ name: 'Sign' }],
         });
         return;
       }
@@ -185,8 +185,14 @@ const HomeScreen = ({ navigation }) => {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+        bounces
+        overScrollMode="always"
+      >
         <View style={styles.header}>
           <View>
             <Text style={styles.heading}>Black Vault wallet</Text>
@@ -194,12 +200,17 @@ const HomeScreen = ({ navigation }) => {
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity
+              activeOpacity={0.8}
               onPress={regenerateWallet}
               style={[styles.headerButton, styles.outlineButton]}
             >
               <Text style={styles.headerButtonText}>Nova Carteira</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleLogout} style={[styles.headerButton, styles.dangerButton]}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={handleLogout}
+              style={[styles.headerButton, styles.dangerButton]}
+            >
               <Text style={[styles.headerButtonText, styles.dangerButtonText]}>Sair</Text>
             </TouchableOpacity>
           </View>
@@ -236,3 +247,5 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
+
+

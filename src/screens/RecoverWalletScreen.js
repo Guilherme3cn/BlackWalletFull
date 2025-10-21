@@ -79,12 +79,13 @@ const RecoverWalletScreen = ({ navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboard}
+        contentContainerStyle={styles.container}
       >
-        <View style={styles.container}>
+        <View style={styles.content}>
           <View style={styles.header}>
             <Text style={styles.title}>Recuperar Carteira</Text>
             <Text style={styles.subtitle}>
@@ -136,7 +137,7 @@ const RecoverWalletScreen = ({ navigation }) => {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.secondaryButton}>
+            <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.8} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>Voltar para login</Text>
             </TouchableOpacity>
           </View>
@@ -147,3 +148,4 @@ const RecoverWalletScreen = ({ navigation }) => {
 };
 
 export default RecoverWalletScreen;
+

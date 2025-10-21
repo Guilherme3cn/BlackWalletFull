@@ -1,15 +1,23 @@
 import { StyleSheet } from 'react-native';
 import { colors, radius, spacing, typography } from '../theme/colors';
 
-export const signUpStyles = StyleSheet.create({
+export const signStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
+  },
+  keyboard: {
+    flex: 1,
+    backgroundColor: colors.background,
   },
   container: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
+  content: {
     flex: 1,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
     justifyContent: 'center',
     gap: spacing.lg,
   },
@@ -65,6 +73,7 @@ export const signUpStyles = StyleSheet.create({
     color: colors.mutedForeground,
     textAlign: 'center',
     fontSize: typography.small,
-    marginTop: spacing.sm,
+    marginTop: 10,
   },
 });
+

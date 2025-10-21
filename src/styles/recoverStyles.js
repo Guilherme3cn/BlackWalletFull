@@ -5,13 +5,18 @@ export const recoverStyles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
   },
   keyboard: {
     flex: 1,
+    backgroundColor: colors.background,
   },
   container: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  content: {
     flex: 1,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
     gap: spacing.lg,
   },

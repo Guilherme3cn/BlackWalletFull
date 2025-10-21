@@ -2,13 +2,19 @@ import { StyleSheet } from 'react-native';
 import { colors, radius, spacing, typography } from '../theme/colors';
 
 export const homeStyles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: spacing.md,
   },
   container: {
-    paddingVertical: spacing.lg,
+    flexGrow: 1,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.xl,
     gap: spacing.lg,
   },
   loadingContainer: {
@@ -77,10 +83,10 @@ export const homeStyles = StyleSheet.create({
     borderRadius: radius.md,
   },
   feedbackSuccess: {
-    backgroundColor: '#14532d',
+    backgroundColor: '#5050509c',
   },
   feedbackError: {
-    backgroundColor: '#dacd1bff',
+    backgroundColor: '#7f1d1d',
   },
   feedbackText: {
     color: colors.foreground,
@@ -88,3 +94,4 @@ export const homeStyles = StyleSheet.create({
     fontSize: typography.small,
   },
 });
+

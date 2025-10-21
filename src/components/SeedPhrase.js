@@ -34,10 +34,10 @@ const SeedPhrase = ({ words = [] }) => {
           <Text style={styles.subtitle}>Guarde em um local seguro e offline</Text>
         </View>
         <View style={styles.actions}>
-          <TouchableOpacity onPress={handleToggleVisibility} style={styles.iconButton}>
-            <Text style={styles.iconText}>{isVisible ? 'OC' : 'VER'}</Text>
+          <TouchableOpacity onPress={handleToggleVisibility} activeOpacity={0.8} style={styles.iconButton}>
+            <Text style={styles.iconText}>{isVisible ? 'NOT' : 'VER'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleShareSeed} style={styles.iconButton}>
+          <TouchableOpacity onPress={handleShareSeed} activeOpacity={0.8} style={styles.iconButton}>
             <Text style={styles.iconText}>TXT</Text>
           </TouchableOpacity>
         </View>
@@ -60,3 +60,4 @@ const SeedPhrase = ({ words = [] }) => {
 };
 
 export default SeedPhrase;
+

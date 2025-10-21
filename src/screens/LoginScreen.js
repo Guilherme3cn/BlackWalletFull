@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Text, TextInput, TouchableOpacity, View, KeyboardAvoidingView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
@@ -48,8 +48,14 @@ const LoginScreen = ({ navigation }) => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboard}
+        contentContainerStyle={styles.container}
+      >
+        <View style={styles.content}>
+        <Image source={require('../../assets/images/logo.png')} style={styles.logo} />
         <View style={styles.header}>
           <Text style={styles.title}>Bitcoin Wallet</Text>
           <Text style={styles.subtitle}>Digite sua senha para acessar sua carteira fria.</Text>
@@ -68,15 +74,15 @@ const LoginScreen = ({ navigation }) => {
             onSubmitEditing={handleLogin}
           />
 
-          <TouchableOpacity style={styles.primaryButton} onPress={handleLogin}>
+          <TouchableOpacity style={styles.primaryButton} onPress={handleLogin} activeOpacity={0.8}>
             <Text style={styles.primaryButtonText}>Acessar Carteira</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity onPress={() => navigation.navigate('SignUp')}>
+        <TouchableOpacity onPress={() => navigation.replace('Sign')} activeOpacity={0.8}>
           <Text style={styles.link}>Ainda nao tem senha? Criar senha</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => navigation.navigate('Recover')}>
+        <TouchableOpacity onPress={() => navigation.navigate('Recover')} activeOpacity={0.8}>
           <Text style={styles.link}>Usar frase semente de uma carteira existente</Text>
         </TouchableOpacity>
 
@@ -85,9 +91,11 @@ const LoginScreen = ({ navigation }) => {
             ? 'Sua senha e armazenada somente neste dispositivo e protege o acesso a frase semente.'
             : 'Nenhuma senha cadastrada ainda. Crie uma nova senha ou recupere uma carteira existente.'}
         </Text>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
 export default LoginScreen;
+
