@@ -75,4 +75,3 @@ const SeedPhrase = ({ words = [] }) => {
 };
 
 export default SeedPhrase;
-

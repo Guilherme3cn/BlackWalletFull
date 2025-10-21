@@ -65,10 +65,13 @@ export const homeStyles = StyleSheet.create({
   },
   outlineButton: {
     backgroundColor: 'transparent',
+    marginLeft: 5,
   },
   dangerButton: {
     borderColor: '#ffd000ff',
-    backgroundColor: '#ffd000ff',
+    backgroundColor: '#ffd000e3',
+    marginLeft: 80,
+   
   },
   dangerButtonText: {
     color: '#000000', 

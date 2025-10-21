@@ -6,6 +6,8 @@ import SeedPhrase from '../components/SeedPhrase';
 import { generateBitcoinAddress, generateSeedPhrase, getAddressBalance } from '../utils/crypto';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { homeStyles as styles } from '../styles/homeStyles';
+import { Feather } from '@expo/vector-icons';
+import { colors } from '../theme/colors';
 
 const WALLET_DATA_KEY = 'bitcoin-wallet-data';
 const PASSWORD_KEY = 'wallet-password';
@@ -35,6 +37,11 @@ const HomeScreen = ({ navigation }) => {
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [feedback, setFeedback] = useState(null);
+  const [isOnline, setIsOnline] = useState(true);
+
+  const handleToggleConnection = useCallback(() => {
+    setIsOnline((prev) => !prev);
+  }, []);
 
   const usdValue = useMemo(() => {
     if (!btcPrice) {
@@ -205,6 +212,18 @@ const HomeScreen = ({ navigation }) => {
               style={[styles.headerButton, styles.outlineButton]}
             >
               <Text style={styles.headerButtonText}>Nova Carteira</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={handleToggleConnection}
+              style={[
+                styles.headerButton,
+                styles.outlineButton,
+                { width: 44, height: 44, paddingHorizontal: 0, justifyContent: 'center', alignItems: 'center' },
+              ]}
+              accessibilityLabel={isOnline ? 'Alternar para modo offline' : 'Alternar para modo online'}
+            >
+              <Feather name={isOnline ? 'wifi' : 'wifi-off'} size={20} color={isOnline ? colors.primary : colors.danger} />
             </TouchableOpacity>
             <TouchableOpacity
               activeOpacity={0.8}
