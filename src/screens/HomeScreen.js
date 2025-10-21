@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
 import { generateBitcoinAddress, generateSeedPhrase, getAddressBalance } from '../utils/crypto';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { homeStyles as styles } from '../styles/homeStyles';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
@@ -30,6 +30,7 @@ const fetchBtcUsdPrice = async () => {
 };
 
 const HomeScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
   const [seedPhrase, setSeedPhrase] = useState([]);
   const [address, setAddress] = useState('');
   const [balance, setBalance] = useState(0);
@@ -38,6 +39,8 @@ const HomeScreen = ({ navigation }) => {
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [isOnline, setIsOnline] = useState(false);
+  const [generatingWallet, setGeneratingWallet] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const didToggleRef = useRef(false);
 
   const handleToggleConnection = useCallback(() => {
@@ -93,6 +96,8 @@ const HomeScreen = ({ navigation }) => {
   const regenerateWallet = useCallback(
     async (skipFeedback = false) => {
       try {
+        setGeneratingWallet(true);
+        await new Promise((resolve) => setTimeout(resolve, 100));
         const newSeedPhrase = generateSeedPhrase();
         const newAddress = generateBitcoinAddress(newSeedPhrase);
 
@@ -113,10 +118,23 @@ const HomeScreen = ({ navigation }) => {
       } catch (error) {
         Alert.alert('Erro', 'Nao foi possivel gerar uma nova carteira.');
         console.error('Erro ao gerar carteira', error);
+      } finally {
+        setGeneratingWallet(false);
       }
     },
     [fetchBalance, showFeedback],
   );
+
+  const confirmRegenerateWallet = useCallback(() => {
+    Alert.alert(
+      'Criar nova carteira?',
+      'Se voce nao salvar as palavras atuais, perdera acesso a esta carteira. Deseja continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Criar nova', style: 'destructive', onPress: () => regenerateWallet() },
+      ],
+    );
+  }, [regenerateWallet]);
 
   const loadWalletFromStorage = useCallback(async () => {
     try {
@@ -138,12 +156,29 @@ const HomeScreen = ({ navigation }) => {
   }, [regenerateWallet]);
 
   const handleLogout = useCallback(async () => {
-    await AsyncStorage.multiRemove([PASSWORD_KEY, WALLET_DATA_KEY]);
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Login' }],
-    });
+    try {
+      setLoggingOut(true);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await AsyncStorage.multiRemove([PASSWORD_KEY, WALLET_DATA_KEY]);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Login' }],
+      });
+    } finally {
+      setLoggingOut(false);
+    }
   }, [navigation]);
+
+  const confirmLogout = useCallback(() => {
+    Alert.alert(
+      'Sair da carteira?',
+      'Se voce nao salvar as palavras atuais, perdera acesso a esta carteira. Deseja sair mesmo assim?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Realmente sair', style: 'destructive', onPress: () => handleLogout() },
+      ],
+    );
+  }, [handleLogout]);
 
   useEffect(() => {
     const ensurePassword = async () => {
@@ -203,14 +238,6 @@ const HomeScreen = ({ navigation }) => {
     return () => clearTimeout(timeout);
   }, [feedback]);
 
-  if (loadingWallet) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Preparando sua carteira...</Text>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
       <ScrollView
@@ -228,7 +255,7 @@ const HomeScreen = ({ navigation }) => {
           <View style={styles.headerActions}>
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={regenerateWallet}
+              onPress={confirmRegenerateWallet}
               style={[styles.headerButton, styles.outlineButton]}
             >
               <Text style={styles.headerButtonText}>Nova Carteira</Text>
@@ -247,7 +274,7 @@ const HomeScreen = ({ navigation }) => {
             </TouchableOpacity>
             <TouchableOpacity
               activeOpacity={0.8}
-              onPress={handleLogout}
+              onPress={confirmLogout}
               style={[styles.headerButton, styles.dangerButton]}
             >
               <Text style={[styles.headerButtonText, styles.dangerButtonText]}>Sair</Text>
@@ -268,7 +295,20 @@ const HomeScreen = ({ navigation }) => {
           ATENCAO: Mantenha sua frase semente em seguranca. Nunca compartilhe com terceiros.
         </Text>
 
-        {feedback ? (
+        {priceRefreshing ? <Text style={styles.loadingText}>Atualizando preco...</Text> : null}
+      </ScrollView>
+      {feedback ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            top: insets.top + 16,
+            left: 16,
+            right: 16,
+            zIndex: 20,
+            elevation: 4,
+          }}
+        >
           <View
             style={[
               styles.feedback,
@@ -277,10 +317,39 @@ const HomeScreen = ({ navigation }) => {
           >
             <Text style={styles.feedbackText}>{feedback.message}</Text>
           </View>
-        ) : null}
-
-        {priceRefreshing ? <Text style={styles.loadingText}>Atualizando preco...</Text> : null}
-      </ScrollView>
+        </View>
+      ) : null}
+      {loadingWallet || generatingWallet || loggingOut ? (
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.85)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            paddingHorizontal: 32,
+          }}
+        >
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text
+            style={{
+              marginTop: 16,
+              color: colors.mutedForeground,
+              fontSize: 16,
+            textAlign: 'center',
+          }}
+        >
+          {loadingWallet
+            ? 'Preparando sua carteira...'
+            : generatingWallet
+            ? 'Gerando nova carteira...'
+            : 'Saindo da carteira...'}
+        </Text>
+      </View>
+    ) : null}
     </SafeAreaView>
   );
 };

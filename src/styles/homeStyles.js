@@ -75,6 +75,7 @@ export const homeStyles = StyleSheet.create({
   },
   dangerButtonText: {
     color: '#000000', 
+    fontSize: 20
   },
   disclaimer: {
     textAlign: 'center',
@@ -89,7 +90,7 @@ export const homeStyles = StyleSheet.create({
     backgroundColor: '#5050509c',
   },
   feedbackError: {
-    backgroundColor: '#7f1d1d',
+    backgroundColor: '#ac0707ea',
   },
   feedbackText: {
     color: colors.foreground,
