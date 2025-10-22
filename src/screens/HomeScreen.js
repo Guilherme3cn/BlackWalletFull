@@ -1,20 +1,115 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  ActivityIndicator,
+  Image,
+  Linking,
+  Modal,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
 import {
   SATOSHIS_IN_BTC,
+  DEFAULT_ADDRESS_TYPE,
+  deriveAddressDetails,
   formatBitcoinAmount,
-  generateBitcoinAddress,
   generateSeedPhrase,
-  getAddressBalance,
+  getWalletAddressesBalance,
+  getWalletTransactionHistory,
   sendBitcoinTransaction,
+  MIN_CHANGE_VALUE,
+  fetchAddressSummary,
 } from '../utils/crypto';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { homeStyles as styles } from '../styles/homeStyles';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
+
+const arraysShallowEqual = (left = [], right = []) => {
+  if (left === right) {
+    return true;
+  }
+
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const compareAddressEntries = (left = [], right = []) => {
+  if (left === right) {
+    return true;
+  }
+
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+
+    if (!a || !b) {
+      return false;
+    }
+
+    if (
+      a.address !== b.address ||
+      a.index !== b.index ||
+      Boolean(a.change) !== Boolean(b.change) ||
+      Boolean(a.used) !== Boolean(b.used) ||
+      (a.type ?? DEFAULT_ADDRESS_TYPE) !== (b.type ?? DEFAULT_ADDRESS_TYPE)
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const isWalletStateEqual = (prev, next) => {
+  if (prev === next) {
+    return true;
+  }
+
+  if (!prev || !next) {
+    return false;
+  }
+
+  if (prev.addressType !== next.addressType) {
+    return false;
+  }
+
+  if (prev.receivingIndex !== next.receivingIndex || prev.changeIndex !== next.changeIndex) {
+    return false;
+  }
+
+  if (!arraysShallowEqual(prev.seedPhrase ?? [], next.seedPhrase ?? [])) {
+    return false;
+  }
+
+  if (
+    !compareAddressEntries(prev.receivingAddresses ?? [], next.receivingAddresses ?? []) ||
+    !compareAddressEntries(prev.changeAddresses ?? [], next.changeAddresses ?? [])
+  ) {
+    return false;
+  }
+
+  return true;
+};
 
 const WALLET_DATA_KEY = 'bitcoin-wallet-data';
 const PASSWORD_KEY = 'wallet-password';
@@ -45,8 +140,7 @@ const fetchBtcPrice = async () => {
 
 const HomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
-  const [seedPhrase, setSeedPhrase] = useState([]);
-  const [address, setAddress] = useState('');
+  const [walletData, setWalletData] = useState(null);
   const [balance, setBalance] = useState(0);
   const [btcPrice, setBtcPrice] = useState({ usd: null, brl: null });
   const [loadingWallet, setLoadingWallet] = useState(true);
@@ -69,10 +163,389 @@ const HomeScreen = ({ navigation }) => {
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
   const [cameraModule, setCameraModule] = useState(null);
   const [cameraModuleError, setCameraModuleError] = useState(null);
+  const [historyModalVisible, setHistoryModalVisible] = useState(false);
+  const [transactions, setTransactions] = useState([]);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
+  const [transactionsError, setTransactionsError] = useState(null);
+  const [addressSummaries, setAddressSummaries] = useState({});
   const didToggleRef = useRef(false);
   const cameraModuleRef = useRef(null);
   const feeIntervalRef = useRef(null);
   const sendStatusTimeoutRef = useRef(null);
+  const walletDataRef = useRef(null);
+  const [pendingIncomingSat, setPendingIncomingSat] = useState(0);
+
+  const seedPhrase = walletData?.seedPhrase ?? [];
+  const hasPendingIncoming = useMemo(() => pendingIncomingSat > 0, [pendingIncomingSat]);
+
+  const buildWalletState = useCallback((seedWords, baseData = {}) => {
+    const normalizedSeed = Array.isArray(seedWords) ? seedWords : [];
+    const type = baseData.addressType ?? DEFAULT_ADDRESS_TYPE;
+
+    const receivingRaw = Array.isArray(baseData.receivingAddresses) ? baseData.receivingAddresses : [];
+    const changeRaw = Array.isArray(baseData.changeAddresses) ? baseData.changeAddresses : [];
+
+    let receiving = receivingRaw
+      .filter((item) => item?.address)
+      .map((item, idx) => ({
+        address: item.address,
+        index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
+        type: item.type ?? type,
+        change: false,
+        used: Boolean(item.used),
+      }));
+
+    let change = changeRaw
+      .filter((item) => item?.address)
+      .map((item, idx) => ({
+        address: item.address,
+        index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
+        type: item.type ?? type,
+        change: true,
+        used: Boolean(item.used),
+      }));
+
+    let receivingIndex =
+      Number.isInteger(baseData.receivingIndex) && baseData.receivingIndex >= 0
+        ? baseData.receivingIndex
+        : receiving.length;
+
+    let changeIndex =
+      Number.isInteger(baseData.changeIndex) && baseData.changeIndex >= 0
+        ? baseData.changeIndex
+        : change.length;
+
+    if (!receiving.length && normalizedSeed.length) {
+      const first = deriveAddressDetails(normalizedSeed, {
+        type,
+        change: false,
+        index: 0,
+      });
+
+      receiving = [
+        {
+          address: first.address,
+          index: 0,
+          type,
+          change: false,
+          used: false,
+        },
+      ];
+      receivingIndex = 1;
+    }
+
+    receivingIndex = Math.max(receivingIndex, receiving.length);
+    changeIndex = Math.max(changeIndex, change.length);
+
+  return {
+    seedPhrase: normalizedSeed,
+    addressType: type,
+    receivingIndex,
+    changeIndex,
+    receivingAddresses: receiving,
+    changeAddresses: change,
+    discoveryComplete: Boolean(baseData.discoveryComplete),
+  };
+}, [deriveAddressDetails]);
+
+const discoverWalletUsage = useCallback(
+  async (seedWords, baseWallet, { gapLimit = 10, maxScan = 40 } = {}) => {
+    if (!Array.isArray(seedWords) || !seedWords.length) {
+      return {
+        wallet: {
+          ...baseWallet,
+          discoveryComplete: true,
+        },
+        summaryMap: {},
+        pendingReceivedSat: 0,
+      };
+    }
+
+    const type = baseWallet.addressType ?? DEFAULT_ADDRESS_TYPE;
+
+    const scanBranch = async (changeFlag) => {
+      const results = new Map();
+      const summaries = {};
+
+      const existing = (changeFlag ? baseWallet.changeAddresses : baseWallet.receivingAddresses) ?? [];
+      existing.forEach((item) => {
+        results.set(item.index, {
+          address: item.address,
+          index: item.index,
+          type: item.type ?? type,
+          change: changeFlag,
+          used: Boolean(item.used),
+        });
+      });
+
+      let index = 0;
+      let emptyStreak = 0;
+      let lastActiveIndex = -1;
+
+      while (index < maxScan && emptyStreak < gapLimit) {
+        let entry = results.get(index);
+
+        if (!entry) {
+          const derived = deriveAddressDetails(seedWords, {
+            type,
+            change: changeFlag,
+            index,
+          });
+          entry = {
+            address: derived.address,
+            index,
+            type,
+            change: changeFlag,
+            used: false,
+          };
+          results.set(index, entry);
+        }
+
+        if (!summaries[entry.address]) {
+          try {
+            summaries[entry.address] = await fetchAddressSummary(entry.address);
+          } catch (error) {
+            console.error(`Erro descobrindo endereco ${entry.address}`, error);
+            summaries[entry.address] = {
+              address: entry.address,
+              balance: 0,
+              balanceSat: 0,
+              pendingReceivedSat: 0,
+              totalReceivedSat: 0,
+              hasActivity: false,
+            };
+          }
+        }
+
+        const summary = summaries[entry.address];
+        const hasActivity =
+          Number(summary.balanceSat ?? 0) > 0 ||
+          Number(summary.pendingReceivedSat ?? 0) > 0 ||
+          Number(summary.totalReceivedSat ?? 0) > 0 ||
+          summary.hasActivity;
+
+        if (hasActivity && !entry.used) {
+          entry.used = true;
+        }
+
+        if (hasActivity) {
+          lastActiveIndex = index;
+          emptyStreak = 0;
+        } else {
+          emptyStreak += 1;
+        }
+
+        index += 1;
+      }
+
+      const deduped = [...results.values()].sort((a, b) => a.index - b.index);
+
+      if (!changeFlag) {
+        const nextIndex =
+          lastActiveIndex >= 0
+            ? lastActiveIndex + 1
+            : deduped.length
+            ? deduped[deduped.length - 1].index + 1
+            : 0;
+        const exists = deduped.some((item) => item.index === nextIndex);
+        if (!exists) {
+          const derived = deriveAddressDetails(seedWords, {
+            type,
+            change: false,
+            index: nextIndex,
+          });
+          deduped.push({
+            address: derived.address,
+            index: nextIndex,
+            type,
+            change: false,
+            used: false,
+          });
+          summaries[derived.address] = {
+            address: derived.address,
+            balance: 0,
+            balanceSat: 0,
+            pendingReceivedSat: 0,
+            totalReceivedSat: 0,
+            hasActivity: false,
+          };
+        }
+      }
+
+      return { addresses: deduped, summaries };
+    };
+
+    const receivingScan = await scanBranch(false);
+    const changeScan = await scanBranch(true);
+
+    const summaryMap = { ...receivingScan.summaries, ...changeScan.summaries };
+
+    const receivingAddresses = receivingScan.addresses;
+    const changeAddresses = changeScan.addresses;
+
+    const receivingIndex = receivingAddresses.length
+      ? Math.max(...receivingAddresses.map((item) => item.index)) + 1
+      : baseWallet.receivingIndex ?? 0;
+
+    const changeIndex = changeAddresses.length
+      ? Math.max(...changeAddresses.map((item) => item.index)) + 1
+      : baseWallet.changeIndex ?? 0;
+
+    const pendingReceivedSat = receivingAddresses.reduce(
+      (total, entry) => total + Number(summaryMap[entry.address]?.pendingReceivedSat ?? 0),
+      0,
+    );
+
+    return {
+      wallet: {
+        ...baseWallet,
+        receivingAddresses,
+        changeAddresses,
+        receivingIndex,
+        changeIndex,
+        discoveryComplete: true,
+      },
+      summaryMap,
+      pendingReceivedSat,
+    };
+  },
+  [deriveAddressDetails, fetchAddressSummary],
+);
+  const resolveDisplayAddress = useCallback((data) => {
+    if (!data?.receivingAddresses?.length) {
+      return '';
+    }
+
+    const receiving = data.receivingAddresses.filter((item) => !item.change);
+    if (!receiving.length) {
+      return '';
+    }
+
+    const unused = receiving.filter((item) => !item.used);
+    if (unused.length) {
+      return unused[unused.length - 1].address;
+    }
+
+    return receiving[receiving.length - 1].address;
+  }, []);
+
+  const persistWalletData = useCallback(async (data) => {
+    if (!data) {
+      return;
+    }
+
+    let shouldPersist = false;
+
+    setWalletData((previous) => {
+      if (isWalletStateEqual(previous, data)) {
+        return previous;
+      }
+
+      shouldPersist = true;
+      return data;
+    });
+
+    if (!shouldPersist) {
+      return;
+    }
+
+    try {
+      await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(data));
+    } catch (error) {
+      console.error('Erro ao salvar dados da carteira', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    walletDataRef.current = walletData;
+  }, [walletData]);
+
+  const loadTransactionHistory = useCallback(async () => {
+    if (!walletDataRef.current) {
+      setTransactions([]);
+      return;
+    }
+
+    if (!isOnline) {
+      setTransactionsError('Ative o modo online para carregar o historico.');
+      setTransactions([]);
+      return;
+    }
+
+    try {
+      setTransactionsLoading(true);
+      setTransactionsError(null);
+      const addresses = [
+        ...(walletDataRef.current.receivingAddresses ?? []),
+        ...(walletDataRef.current.changeAddresses ?? []),
+      ];
+      const history = await getWalletTransactionHistory(addresses);
+      setTransactions(history);
+    } catch (error) {
+      console.error('Erro ao carregar historico de transacoes', error);
+      setTransactionsError('Nao foi possivel carregar o historico de transacoes.');
+    } finally {
+      setTransactionsLoading(false);
+    }
+  }, [isOnline]);
+
+  const handleOpenHistory = useCallback(() => {
+    setHistoryModalVisible(true);
+  }, []);
+
+  const handleCloseHistory = useCallback(() => {
+    setHistoryModalVisible(false);
+    setTransactionsError(null);
+  }, []);
+
+  const handleRefreshHistory = useCallback(() => {
+    loadTransactionHistory();
+  }, [loadTransactionHistory]);
+
+  const openTransactionInExplorer = useCallback((txid) => {
+    if (!txid) {
+      return;
+    }
+
+    Linking.openURL(`https://mempool.space/tx/${txid}`);
+  }, []);
+
+  const openAddressInExplorer = useCallback((addr) => {
+    if (!addr) {
+      return;
+    }
+
+    Linking.openURL(`https://mempool.space/address/${addr}`);
+  }, []);
+
+  const formatHistoryAmount = useCallback((amountSat = 0, direction = 'in') => {
+    const amountBtc = Math.abs(Number(amountSat ?? 0)) / SATOSHIS_IN_BTC;
+    const prefix = direction === 'out' ? '-' : '+';
+    return `${prefix}${formatBitcoinAmount(amountBtc)} BTC`;
+  }, []);
+
+  const formatHistoryDate = useCallback((timestamp) => {
+    if (!Number.isFinite(Number(timestamp))) {
+      return 'Sem data';
+    }
+
+    const date = new Date(Number(timestamp) * 1000);
+    return date.toLocaleString('pt-BR');
+  }, []);
+
+  useEffect(() => {
+    if (historyModalVisible) {
+      loadTransactionHistory();
+    }
+  }, [historyModalVisible, loadTransactionHistory]);
+
+  useEffect(() => {
+    if (hasPendingIncoming && sendModalVisible) {
+      handleCloseSendModal();
+      showFeedback('info', 'Aguarde a confirmacao das transacoes pendentes antes de enviar BTC.');
+    }
+  }, [hasPendingIncoming, sendModalVisible, handleCloseSendModal, showFeedback]);
+
   const percentageOptions = useMemo(
     () => [
       { label: '25%', value: 0.25 },
@@ -82,6 +555,53 @@ const HomeScreen = ({ navigation }) => {
     ],
     [],
   );
+
+  const address = useMemo(
+    () => resolveDisplayAddress(walletData),
+    [walletData, resolveDisplayAddress],
+  );
+
+  const pendingIncomingBtc = useMemo(
+    () => pendingIncomingSat / SATOSHIS_IN_BTC,
+    [pendingIncomingSat],
+  );
+
+  const addressBalances = useMemo(() => {
+    if (!walletData) {
+      return [];
+    }
+
+    const collections = [
+      ...(walletData.receivingAddresses ?? []).map((item) => ({ ...item, change: false })),
+      ...(walletData.changeAddresses ?? []).map((item) => ({ ...item, change: true })),
+    ];
+
+    return collections
+      .map((entry) => {
+        const summary = addressSummaries[entry.address] ?? {};
+        const balanceSat = Number(summary?.balanceSat ?? 0);
+        const pendingSat = Number(summary?.pendingReceivedSat ?? 0);
+
+        if (balanceSat <= 0 && pendingSat <= 0) {
+          return null;
+        }
+
+        const labelPrefix = entry.change ? 'Troco' : 'Recebimento';
+        const label = `${labelPrefix} #${entry.index ?? 0}`;
+
+        return {
+          address: entry.address,
+          label,
+          change: entry.change,
+          index: entry.index,
+          balanceSat,
+          balanceBtc: balanceSat / SATOSHIS_IN_BTC,
+          pendingSat,
+          pendingBtc: pendingSat / SATOSHIS_IN_BTC,
+        };
+      })
+      .filter(Boolean);
+  }, [addressSummaries, walletData]);
 
   const { usd: btcPriceUsd } = btcPrice;
 
@@ -170,13 +690,22 @@ const HomeScreen = ({ navigation }) => {
       return;
     }
 
+    if (hasPendingIncoming) {
+      const pendingText = formatBitcoinAmount(pendingIncomingBtc);
+      showFeedback(
+        'error',
+        `Existe uma transacao recebida pendente (~${pendingText} BTC). Aguarde a confirmacao antes de enviar BTC.`,
+      );
+      return;
+    }
+
     setSendAddress('');
     setSendAmount('');
     setSendModalVisible(true);
     setSendPercentage(null);
     setFeeProfile('fastest');
     setSendStatus(null);
-  }, [address, isOnline, showFeedback]);
+  }, [address, hasPendingIncoming, isOnline, pendingIncomingBtc, showFeedback]);
 
   const handleReceiveBitcoin = useCallback(() => {
     if (!address) {
@@ -498,16 +1027,37 @@ const HomeScreen = ({ navigation }) => {
       return;
     }
 
-    try {
-      setSendingTransaction(true);
-      setSendStatus(null);
-      const result = await sendBitcoinTransaction({
-        seedPhrase,
-        recipientAddress: sendAddress.trim(),
-        amountBtc: parsedSendAmount,
-        feeRate,
-      });
+    if (!walletData) {
+      const message = 'Dados da carteira indisponiveis.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
 
+    if (hasPendingIncoming) {
+      const message = `Existe uma transacao de recebimento pendente (~${formatBitcoinAmount(
+        pendingIncomingBtc,
+      )} BTC). Aguarde a confirmacao para enviar BTC.`;
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    setSendStatus(null);
+
+    const nextChangeIndex =
+      Number.isInteger(walletData.changeIndex) && walletData.changeIndex >= 0
+        ? walletData.changeIndex
+        : (walletData.changeAddresses?.length ?? 0);
+
+    const handleSendError = (error) => {
+      console.error('Erro ao enviar transacao', error);
+      const message = error?.message ?? 'Nao foi possivel enviar a transacao.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+    };
+
+    const processSendResult = async (result) => {
       const successMessage = `Transferencia enviada com sucesso. TXID: ${result.txid}`;
       showFeedback('success', successMessage);
       setSendStatus({ type: 'success', message: successMessage });
@@ -518,12 +1068,122 @@ const HomeScreen = ({ navigation }) => {
         handleCloseSendModal();
       }, 1500);
 
-      await fetchBalance();
+      const usedInputs = Array.isArray(result.usedInputs) ? result.usedInputs : [];
+      const markUsed = (entry) => {
+        if (!entry) {
+          return entry;
+        }
+
+        const wasUsed = usedInputs.some((input) => input?.address === entry.address);
+        if (wasUsed && !entry.used) {
+          return { ...entry, used: true };
+        }
+        return entry;
+      };
+
+      const updatedReceiving = (walletData.receivingAddresses ?? []).map(markUsed);
+      const updatedChange = (walletData.changeAddresses ?? []).map(markUsed);
+
+      let changeIndex = nextChangeIndex;
+      let changeAddresses = updatedChange;
+
+      if (result.changeAddress?.address) {
+        const exists = changeAddresses.some((item) => item.address === result.changeAddress.address);
+
+        if (exists) {
+          changeAddresses = changeAddresses.map((item) =>
+            item.address === result.changeAddress.address ? { ...item, used: true } : item,
+          );
+        } else {
+          changeAddresses = [...changeAddresses, { ...result.changeAddress, used: true }];
+        }
+
+        changeIndex = result.changeAddress.index + 1;
+      }
+
+      const updatedWallet = {
+        ...walletData,
+        receivingAddresses: updatedReceiving,
+        changeAddresses,
+        changeIndex,
+      };
+
+      await persistWalletData(updatedWallet);
+      await fetchWalletBalance(updatedWallet);
+    };
+
+    const broadcastTransaction = async () => {
+      setSendStatus(null);
+      const result = await sendBitcoinTransaction({
+        seedPhrase,
+        recipientAddress: sendAddress.trim(),
+        amountBtc: parsedSendAmount,
+        feeRate,
+        addressType: walletData.addressType ?? DEFAULT_ADDRESS_TYPE,
+        receivingAddresses: walletData.receivingAddresses ?? [],
+        changeAddresses: walletData.changeAddresses ?? [],
+        nextChangeIndex,
+      });
+
+      await processSendResult(result);
+    };
+
+    const promptDustConfirmation = (changeDustSat) => {
+      const dustBtc = changeDustSat / SATOSHIS_IN_BTC;
+      Alert.alert(
+        'Troco abaixo do minimo',
+        `O troco restante (${formatBitcoinAmount(dustBtc)} BTC) e inferior ao minimo de ${MIN_CHANGE_VALUE} sats e sera incorporado na taxa. Deseja continuar mesmo assim?`,
+        [
+          {
+            text: 'Cancelar',
+            style: 'cancel',
+            onPress: () => {
+              setSendingTransaction(false);
+            },
+          },
+          {
+            text: 'Continuar',
+            style: 'destructive',
+            onPress: () => {
+              setSendingTransaction(true);
+              (async () => {
+                try {
+                  await broadcastTransaction();
+                } catch (error) {
+                  handleSendError(error);
+                } finally {
+                  setSendingTransaction(false);
+                }
+              })();
+            },
+          },
+        ],
+      );
+    };
+
+    try {
+      setSendingTransaction(true);
+      const preview = await sendBitcoinTransaction({
+        seedPhrase,
+        recipientAddress: sendAddress.trim(),
+        amountBtc: parsedSendAmount,
+        feeRate,
+        addressType: walletData.addressType ?? DEFAULT_ADDRESS_TYPE,
+        receivingAddresses: walletData.receivingAddresses ?? [],
+        changeAddresses: walletData.changeAddresses ?? [],
+        nextChangeIndex,
+        previewOnly: true,
+      });
+
+      if (preview.changeBelowDust > 0) {
+        setSendingTransaction(false);
+        promptDustConfirmation(preview.changeBelowDust);
+        return;
+      }
+
+      await broadcastTransaction();
     } catch (error) {
-      console.error('Erro ao enviar transacao', error);
-      const message = error?.message ?? 'Nao foi possivel enviar a transacao.';
-      showFeedback('error', message);
-      setSendStatus({ type: 'error', message });
+      handleSendError(error);
     } finally {
       setSendingTransaction(false);
     }
@@ -531,15 +1191,19 @@ const HomeScreen = ({ navigation }) => {
     balance,
     estimatedTotalBtc,
     feeRate,
-    fetchBalance,
+    fetchWalletBalance,
     handleCloseSendModal,
     isOnline,
     parsedSendAmount,
+    persistWalletData,
     seedPhrase,
     sendAddress,
     sendAmount,
     sendingTransaction,
+    hasPendingIncoming,
+    pendingIncomingBtc,
     showFeedback,
+    walletData,
   ]);
 
   const qrCodeUri = useMemo(() => {
@@ -559,20 +1223,136 @@ const HomeScreen = ({ navigation }) => {
     return balance * btcPriceUsd;
   }, [balance, btcPriceUsd]);
 
-  const fetchBalance = useCallback(
-    async (targetAddress = address) => {
-      if (!targetAddress || !isOnline) {
+  const fetchWalletBalance = useCallback(
+    async (targetWallet = walletDataRef.current) => {
+      if (!isOnline || !targetWallet) {
+        return;
+      }
+
+      const trackedAddresses = [
+        ...(Array.isArray(targetWallet.receivingAddresses) ? targetWallet.receivingAddresses : []),
+        ...(Array.isArray(targetWallet.changeAddresses) ? targetWallet.changeAddresses : []),
+      ].filter((item) => item?.address);
+
+      if (!trackedAddresses.length) {
+        setBalance(0);
+        setPendingIncomingSat(0);
+        setAddressSummaries({});
         return;
       }
 
       try {
-        const value = await getAddressBalance(targetAddress);
-        setBalance(value);
+        const {
+          balance: initialBalance,
+          summaryMap,
+        } = await getWalletAddressesBalance(trackedAddresses);
+
+        let workingWallet = targetWallet;
+        let didUpdate = false;
+        const summaryRecords = { ...summaryMap };
+        const walletSeed = Array.isArray(targetWallet.seedPhrase)
+          ? targetWallet.seedPhrase
+          : walletDataRef.current?.seedPhrase ?? [];
+
+        const nextReceiving = workingWallet.receivingAddresses.map((item) => {
+          if (item.used) {
+            return item;
+          }
+
+          const summary = summaryRecords[item.address];
+          if (summary?.totalReceivedSat > 0) {
+            didUpdate = true;
+            return { ...item, used: true };
+          }
+
+          return item;
+        });
+
+        const nextChange = workingWallet.changeAddresses.map((item) => {
+          if (item.used) {
+            return item;
+          }
+
+          const summary = summaryRecords[item.address];
+          if (summary?.hasActivity || Number(summary?.balanceSat ?? 0) > 0) {
+            didUpdate = true;
+            return { ...item, used: true };
+          }
+
+          return item;
+        });
+
+        if (didUpdate) {
+          workingWallet = {
+            ...targetWallet,
+            receivingAddresses: nextReceiving,
+            changeAddresses: nextChange,
+          };
+        }
+
+        const hasUnusedReceiving = workingWallet.receivingAddresses.some((item) => !item.used);
+        if (!hasUnusedReceiving && walletSeed.length) {
+          const nextIndex =
+            Number.isInteger(workingWallet.receivingIndex) && workingWallet.receivingIndex >= 0
+              ? workingWallet.receivingIndex
+              : workingWallet.receivingAddresses.length;
+
+          const nextDetails = deriveAddressDetails(walletSeed, {
+            type: workingWallet.addressType ?? DEFAULT_ADDRESS_TYPE,
+            change: false,
+            index: nextIndex,
+          });
+
+          const newReceivingEntry = {
+            address: nextDetails.address,
+            index: nextIndex,
+            type: workingWallet.addressType ?? DEFAULT_ADDRESS_TYPE,
+            change: false,
+            used: false,
+          };
+
+          workingWallet = {
+            ...workingWallet,
+            receivingIndex: nextIndex + 1,
+            receivingAddresses: [...workingWallet.receivingAddresses, newReceivingEntry],
+          };
+          summaryRecords[newReceivingEntry.address] = {
+            address: newReceivingEntry.address,
+            balance: 0,
+            balanceSat: 0,
+            pendingReceivedSat: 0,
+            totalReceivedSat: 0,
+            hasActivity: false,
+          };
+          didUpdate = true;
+        }
+
+        const finalReceiving = workingWallet.receivingAddresses ?? [];
+        const pendingIncomingSatForReceiving = finalReceiving.reduce((total, entry) => {
+          const summary = summaryRecords[entry.address];
+          return total + Number(summary?.pendingReceivedSat ?? 0);
+        }, 0);
+
+        const aggregatedBalance = Object.values(summaryRecords).reduce(
+          (total, summary) => total + Number(summary?.balance ?? 0),
+          0,
+        );
+
+        setBalance(aggregatedBalance || initialBalance);
+        setPendingIncomingSat(pendingIncomingSatForReceiving);
+        setAddressSummaries(summaryRecords);
+
+        if (didUpdate) {
+          await persistWalletData(workingWallet);
+        }
       } catch (error) {
+        console.error('Erro ao atualizar saldo da carteira', error);
         showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
+        setAddressSummaries({});
+        setPendingIncomingSat(0);
       }
     },
-    [address, isOnline, showFeedback],
+    [isOnline, persistWalletData, deriveAddressDetails, showFeedback],
   );
 
   const refreshBtcPrice = useCallback(async () => {
@@ -599,19 +1379,16 @@ const HomeScreen = ({ navigation }) => {
         setGeneratingWallet(true);
         await new Promise((resolve) => setTimeout(resolve, 100));
         const newSeedPhrase = generateSeedPhrase();
-        const newAddress = generateBitcoinAddress(newSeedPhrase);
+        const initialState = buildWalletState(newSeedPhrase, {
+          addressType: DEFAULT_ADDRESS_TYPE,
+          receivingAddresses: [],
+          changeAddresses: [],
+          discoveryComplete: true,
+        });
 
-        await AsyncStorage.setItem(
-          WALLET_DATA_KEY,
-          JSON.stringify({
-            seedPhrase: newSeedPhrase,
-            address: newAddress,
-          }),
-        );
+        await persistWalletData(initialState);
+        await fetchWalletBalance(initialState);
 
-        setSeedPhrase(newSeedPhrase);
-        setAddress(newAddress);
-        await fetchBalance(newAddress);
         if (!skipFeedback) {
           showFeedback('success', 'Nova carteira gerada. Guarde a frase semente com seguranca.');
         }
@@ -622,19 +1399,39 @@ const HomeScreen = ({ navigation }) => {
         setGeneratingWallet(false);
       }
     },
-    [fetchBalance, showFeedback],
+    [buildWalletState, fetchWalletBalance, persistWalletData, showFeedback],
   );
 
   const confirmRegenerateWallet = useCallback(() => {
-    Alert.alert(
-      'Criar nova carteira?',
-      'Se voce nao salvar as palavras atuais, perdera acesso a esta carteira. Deseja continuar?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Criar nova', style: 'destructive', onPress: () => regenerateWallet() },
-      ],
-    );
-  }, [regenerateWallet]);
+    const showConfirmation = () => {
+      Alert.alert(
+        'Criar nova carteira?',
+        'Se voce nao salvar as palavras atuais, perdera acesso a esta carteira. Deseja continuar?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Criar nova', style: 'destructive', onPress: () => regenerateWallet() },
+        ],
+      );
+    };
+
+    if (balance > 0) {
+      Alert.alert(
+        'Saldo detectado',
+        'Existe saldo disponível nesta carteira. Transfira seus BTC para outra carteira antes de criar uma nova para evitar a perda dos fundos.',
+        [
+          { text: 'Entendi', style: 'cancel' },
+          {
+            text: 'Continuar mesmo assim',
+            style: 'destructive',
+            onPress: () => showConfirmation(),
+          },
+        ],
+      );
+      return;
+    }
+
+    showConfirmation();
+  }, [balance, regenerateWallet]);
 
   const loadWalletFromStorage = useCallback(async () => {
     try {
@@ -642,8 +1439,14 @@ const HomeScreen = ({ navigation }) => {
 
       if (storedData) {
         const parsed = JSON.parse(storedData);
-        setSeedPhrase(parsed.seedPhrase || []);
-        setAddress(parsed.address || '');
+        const normalized = buildWalletState(parsed.seedPhrase || [], parsed);
+        setWalletData(normalized);
+
+        if (!parsed.receivingAddresses) {
+          await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
+        }
+
+        await fetchWalletBalance(normalized);
       } else {
         await regenerateWallet(true);
       }
@@ -653,7 +1456,7 @@ const HomeScreen = ({ navigation }) => {
     } finally {
       setLoadingWallet(false);
     }
-  }, [regenerateWallet]);
+  }, [buildWalletState, fetchWalletBalance, regenerateWallet]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -698,18 +1501,18 @@ const HomeScreen = ({ navigation }) => {
   }, [loadWalletFromStorage, navigation]);
 
   useEffect(() => {
-    if (!address || !isOnline) {
+    if (!isOnline || !walletDataRef.current) {
       return;
     }
 
-    fetchBalance();
+    fetchWalletBalance();
 
     const interval = setInterval(() => {
-      fetchBalance();
+      fetchWalletBalance();
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [address, fetchBalance, isOnline]);
+  }, [fetchWalletBalance, isOnline]);
 
   useEffect(() => {
     if (!didToggleRef.current) {
@@ -718,12 +1521,12 @@ const HomeScreen = ({ navigation }) => {
 
     if (isOnline) {
       showFeedback('success', 'Modo online ativado. Atualizando dados...');
-      fetchBalance();
+      fetchWalletBalance();
       refreshBtcPrice();
     } else {
       showFeedback('info', 'Modo offline ativado. Atualizacao de dados desabilitada.');
     }
-  }, [isOnline, fetchBalance, refreshBtcPrice, showFeedback]);
+  }, [isOnline, fetchWalletBalance, refreshBtcPrice, showFeedback]);
 
   useEffect(() => {
     didToggleRef.current = true;
@@ -790,14 +1593,61 @@ const HomeScreen = ({ navigation }) => {
           onRefreshPrice={refreshBtcPrice}
         />
 
+        {addressBalances.length ? (
+          <View style={styles.addressBalancesSection}>
+            <Text style={styles.addressBalancesTitle}>Enderecos monitorados</Text>
+            {addressBalances.map((item) => (
+              <View key={item.address} style={styles.addressBalanceItem}>
+                <View style={styles.addressBalanceHeader}>
+                  <Text style={styles.addressBalanceLabel}>{item.label}</Text>
+                  <Text style={styles.addressBalanceValue}>{formatBitcoinAmount(item.balanceBtc)} BTC</Text>
+                </View>
+                <Text style={styles.addressBalanceAddress} numberOfLines={1} ellipsizeMode="middle">
+                  {item.address}
+                </Text>
+                {item.pendingSat > 0 ? (
+                  <Text style={styles.addressBalancePending}>
+                    Pendente: {formatBitcoinAmount(item.pendingBtc)} BTC
+                  </Text>
+                ) : null}
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={styles.addressBalanceLink}
+                  onPress={() => openAddressInExplorer(item.address)}
+                >
+                  <Feather name="external-link" size={14} color={colors.primaryText} />
+                  <Text style={styles.addressBalanceLinkText}>Ver no mempool</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         <View style={styles.quickActions}>
           <TouchableOpacity
             activeOpacity={0.85}
-            style={[styles.quickActionButton, styles.sendButton]}
+            style={[
+              styles.quickActionButton,
+              styles.sendButton,
+              hasPendingIncoming ? styles.quickActionButtonDisabled : null,
+            ]}
             onPress={handleSendBitcoin}
+            disabled={hasPendingIncoming}
           >
-            <Feather name="arrow-up-right" size={18} color={colors.primaryText} style={styles.quickActionIcon} />
-            <Text style={styles.quickActionText}>Enviar BTC</Text>
+            <Feather
+              name="arrow-up-right"
+              size={18}
+              color={hasPendingIncoming ? colors.mutedForeground : colors.primaryText}
+              style={styles.quickActionIcon}
+            />
+            <Text
+              style={[
+                styles.quickActionText,
+                hasPendingIncoming ? styles.quickActionTextDisabled : null,
+              ]}
+            >
+              Enviar BTC
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.85}
@@ -808,6 +1658,21 @@ const HomeScreen = ({ navigation }) => {
             <Text style={styles.quickActionTextSecondary}>Receber BTC</Text>
           </TouchableOpacity>
         </View>
+
+        {hasPendingIncoming ? (
+          <Text style={styles.pendingNotice}>
+            Transacao recebida pendente (~{formatBitcoinAmount(pendingIncomingBtc)} BTC) aguardando confirmacao.
+          </Text>
+        ) : null}
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.historyButton}
+          onPress={handleOpenHistory}
+        >
+          <Feather name="clock" size={18} color={colors.primaryText} style={styles.historyButtonIcon} />
+          <Text style={styles.historyButtonText}>Historico de transacoes</Text>
+        </TouchableOpacity>
 
         <SeedPhrase words={seedPhrase} />
 
@@ -1094,6 +1959,9 @@ const HomeScreen = ({ navigation }) => {
             <Text style={styles.modalAddress} selectable>
               {address}
             </Text>
+            <Text style={styles.modalHint}>
+              O saldo restante apos um envio pode ser movido automaticamente para um endereco de troco oculto, mas continua vinculado a sua seed.
+            </Text>
             <TouchableOpacity
               activeOpacity={0.85}
               style={styles.modalClose}
@@ -1101,6 +1969,87 @@ const HomeScreen = ({ navigation }) => {
             >
               <Text style={styles.modalCloseText}>Fechar</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={historyModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseHistory}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, styles.historyModalCard]}>
+            <Text style={styles.modalTitle}>Historico de transacoes</Text>
+            {transactionsLoading ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : (
+              <>
+                {transactionsError ? (
+                  <Text style={styles.historyError}>{transactionsError}</Text>
+                ) : null}
+                {transactions.length ? (
+                  <ScrollView style={styles.historyList}>
+                    {transactions.map((tx) => (
+                      <View key={tx.txid} style={styles.historyItem}>
+                        <View style={styles.historyItemHeader}>
+                          <Text
+                            style={[
+                              styles.historyAmount,
+                              tx.direction === 'out'
+                                ? styles.historyAmountNegative
+                                : styles.historyAmountPositive,
+                            ]}
+                          >
+                            {formatHistoryAmount(tx.netSat, tx.direction)}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.historyStatus,
+                              tx.confirmed ? styles.historyStatusCompleted : styles.historyStatusPending,
+                            ]}
+                          >
+                            {tx.confirmed ? 'Concluida' : 'Pendente'}
+                          </Text>
+                        </View>
+                        <Text style={styles.historyMeta}>{formatHistoryDate(tx.blockTime)}</Text>
+                        <Text style={styles.historyTxid} numberOfLines={1} ellipsizeMode="middle">
+                          {tx.txid}
+                        </Text>
+                        <TouchableOpacity
+                          activeOpacity={0.8}
+                          style={styles.historyLinkButton}
+                          onPress={() => openTransactionInExplorer(tx.txid)}
+                        >
+                          <Text style={styles.historyLinkText}>Ver no mempool</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
+                ) : (
+                  <Text style={styles.historyEmptyText}>Nenhuma transacao encontrada.</Text>
+                )}
+              </>
+            )}
+            <View style={styles.historyActions}>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[styles.historyActionButton, transactionsLoading ? styles.modalPrimaryButtonDisabled : null]}
+                onPress={handleRefreshHistory}
+                disabled={transactionsLoading}
+              >
+                <Text style={styles.historyActionButtonText}>
+                  {transactionsLoading ? 'Atualizando...' : 'Atualizar'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={styles.historyCloseButton}
+                onPress={handleCloseHistory}
+              >
+                <Text style={styles.historyCloseButtonText}>Fechar</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>

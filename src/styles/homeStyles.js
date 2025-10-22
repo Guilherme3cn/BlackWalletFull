@@ -54,6 +54,88 @@ export const homeStyles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.md,
   },
+  addressBalancesSection: {
+    width: '100%',
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.secondary,
+    gap: spacing.sm,
+  },
+  addressBalancesTitle: {
+    color: colors.primary,
+    fontSize: typography.small,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  addressBalanceItem: {
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  addressBalanceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  addressBalanceLabel: {
+    color: colors.foreground,
+    fontSize: typography.small,
+    fontWeight: '600',
+  },
+  addressBalanceValue: {
+    color: colors.primary,
+    fontSize: typography.small,
+    fontWeight: '700',
+  },
+  addressBalanceAddress: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
+  },
+  addressBalancePending: {
+    color: colors.danger,
+    fontSize: typography.tiny,
+  },
+  addressBalanceLink: {
+    marginTop: spacing.xs,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primary,
+  },
+  addressBalanceLinkText: {
+    color: colors.primaryText,
+    fontSize: typography.tiny,
+    fontWeight: '600',
+  },
+  historyButton: {
+    marginTop: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.secondary,
+  },
+  historyButtonIcon: {
+    marginRight: 0,
+  },
+  historyButtonText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.body,
+  },
   quickActionButton: {
     flex: 1,
     flexDirection: 'row',
@@ -72,6 +154,12 @@ export const homeStyles = StyleSheet.create({
     color: colors.primaryText,
     fontSize: typography.body,
     fontWeight: '600',
+  },
+  quickActionButtonDisabled: {
+    opacity: 0.6,
+  },
+  quickActionTextDisabled: {
+    color: colors.mutedForeground,
   },
   quickActionTextSecondary: {
     color: colors.foreground,
@@ -170,6 +258,18 @@ export const homeStyles = StyleSheet.create({
     fontSize: typography.small,
     textAlign: 'center',
     paddingHorizontal: spacing.sm,
+  },
+  modalHint: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
+    textAlign: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  pendingNotice: {
+    marginTop: spacing.xs,
+    color: colors.danger,
+    fontSize: typography.tiny,
+    textAlign: 'center',
   },
   sendModalOptions: {
     width: '100%',
@@ -402,6 +502,107 @@ export const homeStyles = StyleSheet.create({
   feedbackText: {
     color: colors.foreground,
     textAlign: 'center',
+    fontSize: typography.small,
+  },
+  historyModalCard: {
+    maxHeight: '80%',
+    width: '100%',
+    gap: spacing.sm,
+  },
+  historyList: {
+    width: '100%',
+    maxHeight: 320,
+  },
+  historyItem: {
+    width: '100%',
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: spacing.xs,
+  },
+  historyItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  historyAmount: {
+    fontSize: typography.body,
+    fontWeight: '600',
+  },
+  historyAmountPositive: {
+    color: colors.primary,
+  },
+  historyAmountNegative: {
+    color: colors.danger,
+  },
+  historyStatus: {
+    fontSize: typography.tiny,
+    fontWeight: '600',
+  },
+  historyStatusCompleted: {
+    color: colors.primary,
+  },
+  historyStatusPending: {
+    color: colors.mutedForeground,
+  },
+  historyMeta: {
+    fontSize: typography.tiny,
+    color: colors.mutedForeground,
+  },
+  historyTxid: {
+    fontSize: typography.tiny,
+    color: colors.foreground,
+  },
+  historyLinkButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.primary,
+  },
+  historyLinkText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.tiny,
+  },
+  historyEmptyText: {
+    color: colors.mutedForeground,
+    textAlign: 'center',
+    fontSize: typography.small,
+  },
+  historyError: {
+    color: colors.danger,
+    textAlign: 'center',
+    fontSize: typography.small,
+  },
+  historyActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    width: '100%',
+  },
+  historyActionButton: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+  },
+  historyActionButtonText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  historyCloseButton: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  historyCloseButtonText: {
+    color: colors.foreground,
+    fontWeight: '600',
     fontSize: typography.small,
   },
 });

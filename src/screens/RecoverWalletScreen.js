@@ -3,7 +3,7 @@ import { Alert, KeyboardAvoidingView, Platform, Text, TextInput, TouchableOpacit
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
-import { generateBitcoinAddress, parseSeedPhrase, validateSeedPhrase } from '../utils/crypto';
+import { DEFAULT_ADDRESS_TYPE, deriveAddressDetails, parseSeedPhrase, validateSeedPhrase } from '../utils/crypto';
 import { recoverStyles as styles } from '../styles/recoverStyles';
 
 const PASSWORD_KEY = 'wallet-password';
@@ -48,19 +48,35 @@ const RecoverWalletScreen = ({ navigation }) => {
     try {
       setIsSubmitting(true);
 
-      const recoveredAddress = generateBitcoinAddress(words);
+      const receivingDetails = deriveAddressDetails(words, {
+        type: DEFAULT_ADDRESS_TYPE,
+        change: false,
+        index: 0,
+      });
 
-      if (!recoveredAddress) {
-        throw new Error('Falha ao gerar endereço a partir da frase semente.');
+      if (!receivingDetails?.address) {
+        throw new Error('Falha ao derivar endereco inicial da carteira.');
       }
 
-      await AsyncStorage.setItem(
-        WALLET_DATA_KEY,
-        JSON.stringify({
-          seedPhrase: words,
-          address: recoveredAddress,
-        }),
-      );
+      const recoveredWallet = {
+        seedPhrase: words,
+        addressType: DEFAULT_ADDRESS_TYPE,
+        receivingIndex: 1,
+        changeIndex: 0,
+        receivingAddresses: [
+          {
+            address: receivingDetails.address,
+            index: 0,
+            type: DEFAULT_ADDRESS_TYPE,
+            change: false,
+            used: false,
+          },
+        ],
+        changeAddresses: [],
+        discoveryComplete: false,
+      };
+
+      await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(recoveredWallet));
 
       await AsyncStorage.setItem(PASSWORD_KEY, password);
 
