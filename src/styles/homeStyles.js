@@ -137,6 +137,23 @@ export const homeStyles = StyleSheet.create({
     fontWeight: '600',
     fontSize: typography.small,
   },
+  qrScannerFallback: {
+    width: '100%',
+    height: 240,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  qrScannerFallbackText: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+    textAlign: 'center',
+  },
   receiveModalQr: {
     width: 240,
     height: 240,
@@ -176,10 +193,112 @@ export const homeStyles = StyleSheet.create({
     fontWeight: '600',
     fontSize: typography.small,
   },
+  percentageRow: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  percentageButton: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  percentageButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  percentageButtonDisabled: {
+    opacity: 0.6,
+  },
+  percentageButtonText: {
+    color: colors.foreground,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  percentageButtonTextActive: {
+    color: colors.primaryText,
+  },
+  percentageButtonTextDisabled: {
+    color: colors.mutedForeground,
+  },
+  feeOptionsRow: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  feeOptionButton: {
+    flex: 1,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.secondary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  feeOptionButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  feeOptionText: {
+    color: colors.foreground,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  feeOptionTextActive: {
+    color: colors.primaryText,
+  },
+  feeOptionDescription: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
+    textAlign: 'center',
+  },
+  feeOptionDescriptionActive: {
+    color: colors.primaryText,
+  },
   modalDividerText: {
     color: colors.mutedForeground,
     fontSize: typography.small,
     textAlign: 'center',
+  },
+  feeInfo: {
+    width: '100%',
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  feeInfoLine: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  feeInfoLabel: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
+  feeInfoValue: {
+    color: colors.foreground,
+    fontSize: typography.body,
+    fontWeight: '600',
+  },
+  feeInfoMeta: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
+  },
+  feeInfoSecondary: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
+    textAlign: 'right',
   },
   modalInput: {
     width: '100%',

@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
-import { generateBitcoinAddress, generateSeedPhrase, getAddressBalance } from '../utils/crypto';
+import { formatBitcoinAmount, generateBitcoinAddress, generateSeedPhrase, getAddressBalance } from '../utils/crypto';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { homeStyles as styles } from '../styles/homeStyles';
 import { Feather } from '@expo/vector-icons';
@@ -12,6 +11,10 @@ import { colors } from '../theme/colors';
 
 const WALLET_DATA_KEY = 'bitcoin-wallet-data';
 const PASSWORD_KEY = 'wallet-password';
+const FEE_REFRESH_INTERVAL = 60000;
+const ESTIMATED_TX_SIZE_VBYTES = 110;
+const SATOSHIS_IN_BTC = 100000000;
+const FEE_API_URL = 'https://mempool.space/api/v1/fees/recommended';
 
 const fetchBtcUsdPrice = async () => {
   const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
@@ -45,10 +48,77 @@ const HomeScreen = ({ navigation }) => {
   const [sendModalVisible, setSendModalVisible] = useState(false);
   const [sendAddress, setSendAddress] = useState('');
   const [sendAmount, setSendAmount] = useState('');
+  const [sendPercentage, setSendPercentage] = useState(null);
+  const [feeRate, setFeeRate] = useState(null);
+  const [feeProfile, setFeeProfile] = useState('fastest');
+  const [feeUpdating, setFeeUpdating] = useState(false);
+  const [feeError, setFeeError] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [cameraModule, setCameraModule] = useState(null);
+  const [cameraModuleError, setCameraModuleError] = useState(null);
   const didToggleRef = useRef(false);
+  const cameraModuleRef = useRef(null);
+  const feeIntervalRef = useRef(null);
+  const percentageOptions = useMemo(
+    () => [
+      { label: '25%', value: 0.25 },
+      { label: '50%', value: 0.5 },
+      { label: '75%', value: 0.75 },
+      { label: 'Max', value: 1 },
+    ],
+    [],
+  );
+
+  const parsedSendAmount = useMemo(() => {
+    if (!sendAmount) {
+      return 0;
+    }
+    const normalized = String(sendAmount).replace(',', '.');
+    const value = Number.parseFloat(normalized);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, [sendAmount]);
+
+  const estimatedFeeBtc = useMemo(() => {
+    if (!feeRate || feeRate <= 0) {
+      return 0;
+    }
+    return (feeRate * ESTIMATED_TX_SIZE_VBYTES) / SATOSHIS_IN_BTC;
+  }, [feeRate]);
+
+  const estimatedTotalBtc = useMemo(() => {
+    return parsedSendAmount + estimatedFeeBtc;
+  }, [estimatedFeeBtc, parsedSendAmount]);
+
+  const estimatedFeeUsd = useMemo(() => {
+    if (!btcPrice || !estimatedFeeBtc) {
+      return null;
+    }
+    return estimatedFeeBtc * btcPrice;
+  }, [btcPrice, estimatedFeeBtc]);
+
+  const estimatedTotalUsd = useMemo(() => {
+    if (!btcPrice) {
+      return null;
+    }
+    return estimatedTotalBtc * btcPrice;
+  }, [btcPrice, estimatedTotalBtc]);
+
+  const feeOptions = useMemo(
+    () => [
+      { key: 'fastest', label: 'Alta', description: 'Confirma em ~1 bloco' },
+      { key: 'medium', label: 'Media', description: 'Confirma em ~3 blocos' },
+      { key: 'economy', label: 'Economica', description: 'Confirma em 6+ blocos' },
+    ],
+    [],
+  );
+
+  const selectedFeeOption = useMemo(
+    () => feeOptions.find((option) => option.key === feeProfile) ?? feeOptions[0],
+    [feeOptions, feeProfile],
+  );
+
+  const CameraComponent = useMemo(() => cameraModule?.CameraView ?? null, [cameraModule]);
 
   const handleToggleConnection = useCallback(() => {
     setIsOnline((prev) => !prev);
@@ -68,6 +138,8 @@ const HomeScreen = ({ navigation }) => {
     setSendAddress('');
     setSendAmount('');
     setSendModalVisible(true);
+    setSendPercentage(null);
+    setFeeProfile('fastest');
   }, [address, isOnline, showFeedback]);
 
   const handleReceiveBitcoin = useCallback(() => {
@@ -84,29 +156,60 @@ const HomeScreen = ({ navigation }) => {
     setSendModalVisible(false);
     setSendAddress('');
     setSendAmount('');
+    setSendPercentage(null);
+    setFeeProfile('fastest');
+    setCameraModuleError(null);
+  }, []);
+
+  const loadCameraModule = useCallback(async () => {
+    if (cameraModuleRef.current) {
+      return cameraModuleRef.current;
+    }
+
+    try {
+      const module = await import('expo-camera');
+      cameraModuleRef.current = module;
+      setCameraModule(module);
+      return module;
+    } catch (error) {
+      console.error('Erro ao carregar modulo da camera', error);
+      throw error;
+    }
   }, []);
 
   const handleScanQrCode = useCallback(async () => {
     try {
-      if (!cameraPermission?.granted) {
-        if (!requestCameraPermission) {
-          showFeedback('error', 'Camera nao disponivel neste dispositivo.');
-          return;
-        }
+      const camera = await loadCameraModule();
 
-        const permission = await requestCameraPermission();
-        if (!permission?.granted) {
-          showFeedback('error', 'Permissao de camera negada.');
-          return;
-        }
+      const requestPermission =
+        camera?.requestCameraPermissionsAsync ?? camera?.Camera?.requestPermissionsAsync;
+
+      if (!requestPermission) {
+        showFeedback('error', 'Camera nao disponivel neste dispositivo.');
+        return;
       }
 
+      const permission = await requestPermission();
+
+      if (!permission?.granted) {
+        showFeedback('error', 'Permissao de camera negada.');
+        return;
+      }
+
+      if (!camera?.CameraView) {
+        showFeedback('error', 'Leitor de QR Code indisponivel neste dispositivo.');
+        setCameraModuleError('Leitor de QR Code indisponivel neste dispositivo.');
+        return;
+      }
+
+      setCameraModuleError(null);
       setIsScanning(true);
     } catch (error) {
-      console.error('Erro ao solicitar permissao da camera', error);
+      console.error('Erro ao preparar camera para leitura de QR Code', error);
+      setCameraModuleError('Nao foi possivel acessar a camera do dispositivo.');
       showFeedback('error', 'Nao foi possivel acessar a camera do dispositivo.');
     }
-  }, [cameraPermission, requestCameraPermission, showFeedback]);
+  }, [loadCameraModule, showFeedback]);
 
   const handleQrCodeScanned = useCallback(
     ({ data }) => {
@@ -153,6 +256,7 @@ const HomeScreen = ({ navigation }) => {
       if (extractedAmount) {
         setSendAmount(extractedAmount);
       }
+      setSendPercentage(null);
 
       setIsScanning(false);
       showFeedback('success', 'Endereco preenchido via QR Code.');
@@ -163,6 +267,109 @@ const HomeScreen = ({ navigation }) => {
   const handleCancelScan = useCallback(() => {
     setIsScanning(false);
   }, []);
+
+  const handleSelectFeeProfile = useCallback(
+    (profile) => {
+      setFeeProfile(profile);
+      if (sendModalVisible) {
+        fetchMinerFee();
+      }
+    },
+    [fetchMinerFee, sendModalVisible],
+  );
+
+  const fetchMinerFee = useCallback(async () => {
+    if (!isOnline) {
+      setFeeError('Ative o modo online para calcular a taxa.');
+      return;
+    }
+
+    try {
+      setFeeUpdating(true);
+      setFeeError(null);
+      const response = await fetch(FEE_API_URL);
+      if (!response.ok) {
+        throw new Error(`Status ${response.status}`);
+      }
+
+      const data = await response.json();
+      let rate;
+      if (feeProfile === 'fastest') {
+        rate = Number(data?.fastestFee);
+      } else if (feeProfile === 'medium') {
+        rate = Number(data?.halfHourFee);
+      } else if (feeProfile === 'economy') {
+        rate = Number(data?.hourFee ?? data?.economyFee);
+      }
+
+      if (!Number.isFinite(rate) || rate <= 0) {
+        rate =
+          Number(data?.fastestFee) ||
+          Number(data?.halfHourFee) ||
+          Number(data?.hourFee) ||
+          Number(data?.economyFee) ||
+          Number(data?.minimumFee);
+      }
+
+      if (!Number.isFinite(rate) || rate <= 0) {
+        throw new Error('Resposta sem taxa valida');
+      }
+
+      setFeeRate(rate);
+    } catch (error) {
+      console.error('Erro ao atualizar taxa de mineracao', error);
+      setFeeError('Nao foi possivel atualizar a taxa de mineracao.');
+    } finally {
+      setFeeUpdating(false);
+    }
+  }, [feeProfile, isOnline]);
+
+  useEffect(() => {
+    if (!sendModalVisible) {
+      setFeeRate(null);
+      setFeeError(null);
+      setFeeUpdating(false);
+      if (feeIntervalRef.current) {
+        clearInterval(feeIntervalRef.current);
+        feeIntervalRef.current = null;
+      }
+      return;
+    }
+
+    if (!isOnline) {
+      setFeeError('Ative o modo online para calcular a taxa.');
+      if (feeIntervalRef.current) {
+        clearInterval(feeIntervalRef.current);
+        feeIntervalRef.current = null;
+      }
+      setFeeRate(null);
+      return;
+    }
+
+    fetchMinerFee();
+    feeIntervalRef.current = setInterval(fetchMinerFee, FEE_REFRESH_INTERVAL);
+
+    return () => {
+      if (feeIntervalRef.current) {
+        clearInterval(feeIntervalRef.current);
+        feeIntervalRef.current = null;
+      }
+    };
+  }, [fetchMinerFee, feeProfile, isOnline, sendModalVisible]);
+
+  const handleSelectSendPercentage = useCallback(
+    (value) => {
+      setSendPercentage(value);
+      if (!balance || balance <= 0) {
+        setSendAmount('0');
+        return;
+      }
+
+      const amount = balance * value;
+      setSendAmount(formatBitcoinAmount(amount));
+    },
+    [balance],
+  );
 
   const handleSubmitSend = useCallback(() => {
     if (!isOnline) {
@@ -520,15 +727,27 @@ const HomeScreen = ({ navigation }) => {
             <Text style={styles.modalTitle}>Enviar BTC</Text>
             {isScanning ? (
               <>
-                <View style={styles.qrScannerContainer}>
-                  <CameraView
-                    style={styles.qrScanner}
-                    facing="back"
-                    barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                    onBarcodeScanned={handleQrCodeScanned}
-                  />
-                </View>
-                <Text style={styles.qrScannerHint}>Aponte para o QR Code do destinatario</Text>
+                {CameraComponent ? (
+                  <>
+                    <View style={styles.qrScannerContainer}>
+                      <CameraComponent
+                        style={styles.qrScanner}
+                        facing="back"
+                        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                        onBarcodeScanned={handleQrCodeScanned}
+                      />
+                    </View>
+                    <Text style={styles.qrScannerHint}>Aponte para o QR Code do destinatario</Text>
+                  </>
+                ) : (
+                  <View style={styles.qrScannerFallback}>
+                    <Feather name="camera-off" size={36} color={colors.mutedForeground} />
+                    <Text style={styles.qrScannerFallbackText}>
+                      {cameraModuleError ??
+                        'Camera indisponivel. Verifique se o dispositivo suporta leitura de QR code.'}
+                    </Text>
+                  </View>
+                )}
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.qrScannerCancel}
@@ -559,15 +778,109 @@ const HomeScreen = ({ navigation }) => {
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
+                <View style={styles.percentageRow}>
+                  {percentageOptions.map((option) => {
+                    const isActive = sendPercentage === option.value;
+                    const isDisabled = balance <= 0;
+                    return (
+                      <TouchableOpacity
+                        key={option.label}
+                        activeOpacity={0.85}
+                        disabled={isDisabled}
+                        style={[
+                          styles.percentageButton,
+                          isActive ? styles.percentageButtonActive : null,
+                          isDisabled ? styles.percentageButtonDisabled : null,
+                        ]}
+                        onPress={() => handleSelectSendPercentage(option.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.percentageButtonText,
+                            isActive ? styles.percentageButtonTextActive : null,
+                            isDisabled ? styles.percentageButtonTextDisabled : null,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.feeOptionsRow}>
+                  {feeOptions.map((option) => {
+                    const isActive = feeProfile === option.key;
+                    return (
+                      <TouchableOpacity
+                        key={option.key}
+                        activeOpacity={0.85}
+                        style={[styles.feeOptionButton, isActive ? styles.feeOptionButtonActive : null]}
+                        onPress={() => handleSelectFeeProfile(option.key)}
+                      >
+                        <Text
+                          style={[styles.feeOptionText, isActive ? styles.feeOptionTextActive : null]}
+                        >
+                          {option.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.feeOptionDescription,
+                            isActive ? styles.feeOptionDescriptionActive : null,
+                          ]}
+                        >
+                          {option.description}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
                 <TextInput
                   value={sendAmount}
-                  onChangeText={setSendAmount}
+                  onChangeText={(value) => {
+                    setSendAmount(value);
+                    setSendPercentage(null);
+                  }}
                   placeholder="Quantidade de BTC"
                   placeholderTextColor={colors.mutedForeground}
                   style={styles.modalInput}
                   keyboardType="decimal-pad"
                   returnKeyType="done"
                 />
+                <View style={styles.feeInfo}>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Taxa estimada</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {feeRate ? `${formatBitcoinAmount(estimatedFeeBtc)} BTC` : '-'}
+                    </Text>
+                  </View>
+                  <Text style={styles.feeInfoMeta}>
+                    {feeUpdating
+                      ? 'Atualizando taxa...'
+                      : feeError
+                      ? feeError
+                      : feeRate
+                      ? `${feeRate} sat/vByte • ${selectedFeeOption.description}`
+                      : 'Taxa estimada indisponivel.'}
+                  </Text>
+                  {btcPrice && feeRate ? (
+                    <Text style={styles.feeInfoSecondary}>
+                      ~ ${estimatedFeeUsd?.toFixed(2) ?? '0.00'} USD
+                    </Text>
+                  ) : null}
+                  <View style={[styles.feeInfoLine, { marginTop: 8 }]}>
+                    <Text style={styles.feeInfoLabel}>Total com taxa</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {parsedSendAmount > 0 || estimatedFeeBtc > 0
+                        ? `${formatBitcoinAmount(estimatedTotalBtc)} BTC`
+                        : '-'}
+                    </Text>
+                  </View>
+                  {btcPrice && (parsedSendAmount > 0 || estimatedFeeBtc > 0) ? (
+                    <Text style={styles.feeInfoSecondary}>
+                      ~ ${estimatedTotalUsd?.toFixed(2) ?? '0.00'} USD
+                    </Text>
+                  ) : null}
+                </View>
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.modalPrimaryButton}
@@ -619,5 +932,3 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
-
-
