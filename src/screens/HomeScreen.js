@@ -22,21 +22,25 @@ const FEE_REFRESH_INTERVAL = 60000;
 const ESTIMATED_TX_SIZE_VBYTES = 110;
 const FEE_API_URL = 'https://mempool.space/api/v1/fees/recommended';
 
-const fetchBtcUsdPrice = async () => {
-  const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+const fetchBtcPrice = async () => {
+  const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,brl');
 
   if (!response.ok) {
     throw new Error(`Falha ao buscar preco BTC: ${response.status}`);
   }
 
   const data = await response.json();
-  const price = data?.bitcoin?.usd;
+  const usdPrice = data?.bitcoin?.usd;
+  const brlPrice = data?.bitcoin?.brl;
 
-  if (!price) {
-    throw new Error('Preco do Bitcoin indisponivel');
+  if (!usdPrice || !brlPrice) {
+    throw new Error('Precos do Bitcoin indisponiveis');
   }
 
-  return Number(price);
+  return {
+    usd: Number(usdPrice),
+    brl: Number(brlPrice),
+  };
 };
 
 const HomeScreen = ({ navigation }) => {
@@ -44,7 +48,7 @@ const HomeScreen = ({ navigation }) => {
   const [seedPhrase, setSeedPhrase] = useState([]);
   const [address, setAddress] = useState('');
   const [balance, setBalance] = useState(0);
-  const [btcPrice, setBtcPrice] = useState(null);
+  const [btcPrice, setBtcPrice] = useState({ usd: null, brl: null });
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [feedback, setFeedback] = useState(null);
@@ -79,6 +83,8 @@ const HomeScreen = ({ navigation }) => {
     [],
   );
 
+  const { usd: btcPriceUsd } = btcPrice;
+
   const parsedSendAmount = useMemo(() => {
     if (!sendAmount) {
       return 0;
@@ -100,18 +106,18 @@ const HomeScreen = ({ navigation }) => {
   }, [estimatedFeeBtc, parsedSendAmount]);
 
   const estimatedFeeUsd = useMemo(() => {
-    if (!btcPrice || !estimatedFeeBtc) {
+    if (!btcPriceUsd || !estimatedFeeBtc) {
       return null;
     }
-    return estimatedFeeBtc * btcPrice;
-  }, [btcPrice, estimatedFeeBtc]);
+    return estimatedFeeBtc * btcPriceUsd;
+  }, [btcPriceUsd, estimatedFeeBtc]);
 
   const estimatedTotalUsd = useMemo(() => {
-    if (!btcPrice) {
+    if (!btcPriceUsd) {
       return null;
     }
-    return estimatedTotalBtc * btcPrice;
-  }, [btcPrice, estimatedTotalBtc]);
+    return estimatedTotalBtc * btcPriceUsd;
+  }, [btcPriceUsd, estimatedTotalBtc]);
 
   const feeOptions = useMemo(
     () => [
@@ -546,12 +552,12 @@ const HomeScreen = ({ navigation }) => {
   }, [address]);
 
   const usdValue = useMemo(() => {
-    if (!btcPrice) {
+    if (!btcPriceUsd) {
       return 0;
     }
 
-    return balance * btcPrice;
-  }, [balance, btcPrice]);
+    return balance * btcPriceUsd;
+  }, [balance, btcPriceUsd]);
 
   const fetchBalance = useCallback(
     async (targetAddress = address) => {
@@ -577,7 +583,7 @@ const HomeScreen = ({ navigation }) => {
 
     try {
       setPriceRefreshing(true);
-      const price = await fetchBtcUsdPrice();
+      const price = await fetchBtcPrice();
       setBtcPrice(price);
       showFeedback('success', 'Preco do Bitcoin atualizado com sucesso.');
     } catch (error) {
@@ -780,6 +786,7 @@ const HomeScreen = ({ navigation }) => {
           address={address}
           balance={balance}
           usdValue={usdValue}
+          btcPrice={btcPrice}
           onRefreshPrice={refreshBtcPrice}
         />
 
@@ -1013,7 +1020,7 @@ const HomeScreen = ({ navigation }) => {
                       ? `${feeRate} sat/vByte - ${selectedFeeOption.description}`
                       : 'Taxa estimada indisponivel.'}
                   </Text>
-                  {btcPrice && feeRate ? (
+                  {btcPriceUsd && feeRate ? (
                     <Text style={styles.feeInfoSecondary}>
                       ~ ${estimatedFeeUsd?.toFixed(2) ?? '0.00'} USD
                     </Text>
@@ -1026,7 +1033,7 @@ const HomeScreen = ({ navigation }) => {
                         : '-'}
                     </Text>
                   </View>
-                  {btcPrice && (parsedSendAmount > 0 || estimatedFeeBtc > 0) ? (
+                  {btcPriceUsd && (parsedSendAmount > 0 || estimatedFeeBtc > 0) ? (
                     <Text style={styles.feeInfoSecondary}>
                       ~ ${estimatedTotalUsd?.toFixed(2) ?? '0.00'} USD
                     </Text>
@@ -1102,6 +1109,7 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
+
 
 
 

@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, Alert, Linking } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { formatBitcoinAmount } from '../utils/crypto';
+import { formatBitcoinAmount, SATOSHIS_IN_BTC } from '../utils/crypto';
 import { walletCardStyles as styles } from '../styles/walletCardStyles';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -12,7 +12,16 @@ const formatUsd = (value) =>
     maximumFractionDigits: 2,
   }).format(value || 0);
 
-const WalletCard = ({ address, balance, usdValue, onRefreshPrice }) => {
+const formatBrl = (value) =>
+  new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    maximumFractionDigits: 2,
+  }).format(value || 0);
+
+const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice }) => {
+  const [balanceDisplayMode, setBalanceDisplayMode] = useState('btc'); // btc -> sats -> brl
+
   const handleCopyAddress = async () => {
     if (!address) {
       return;
@@ -29,6 +38,52 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice }) => {
 
     Linking.openURL(`https://mempool.space/address/${address}`);
   };
+
+  const handleCycleBalanceMode = () => {
+    setBalanceDisplayMode((prev) => {
+      if (prev === 'btc') return 'sats';
+      if (prev === 'sats') return 'brl';
+      return 'btc';
+    });
+  };
+
+  const safeBalance = Number(balance || 0);
+
+  useEffect(() => {
+    if (balanceDisplayMode === 'brl' && !btcPrice?.brl && typeof onRefreshPrice === 'function') {
+      onRefreshPrice();
+    }
+  }, [balanceDisplayMode, btcPrice?.brl, onRefreshPrice]);
+
+  const balanceLabel = useMemo(() => {
+    switch (balanceDisplayMode) {
+      case 'sats': {
+        const sats = Math.round(safeBalance * SATOSHIS_IN_BTC);
+        return `${sats.toLocaleString()} sats`;
+      }
+      case 'brl': {
+        if (!btcPrice?.brl) {
+          return 'R$ --';
+        }
+        const brlValue = safeBalance * btcPrice.brl;
+        return formatBrl(brlValue);
+      }
+      case 'btc':
+      default:
+        return `${formatBitcoinAmount(safeBalance)} BTC`;
+    }
+  }, [balanceDisplayMode, btcPrice, safeBalance]);
+
+  const secondaryLabel = useMemo(() => {
+    if (balanceDisplayMode === 'btc' || balanceDisplayMode === 'sats') {
+      const usdText = formatUsd(usdValue);
+      const brlText = btcPrice?.brl ? formatBrl(safeBalance * btcPrice.brl) : null;
+      return brlText ? `${usdText} • ${brlText}` : usdText;
+    }
+
+    const sats = Math.round(safeBalance * SATOSHIS_IN_BTC);
+    return `${formatBitcoinAmount(safeBalance)} BTC • ${sats.toLocaleString()} sats`;
+  }, [balanceDisplayMode, btcPrice, safeBalance, usdValue]);
 
   return (
     <View style={styles.card}>
@@ -49,8 +104,10 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice }) => {
 
       <View style={styles.section}>
         <Text style={styles.label}>Saldo</Text>
-        <Text style={styles.balanceText}>{formatBitcoinAmount(balance)} BTC</Text>
-        <Text style={styles.usdText}>{formatUsd(usdValue)}</Text>
+        <TouchableOpacity activeOpacity={0.85} onPress={handleCycleBalanceMode}>
+          <Text style={styles.balanceText}>{balanceLabel}</Text>
+        </TouchableOpacity>
+        <Text style={styles.usdText}>{secondaryLabel}</Text>
       </View>
 
       <View style={styles.section}>
@@ -69,4 +126,5 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice }) => {
 };
 
 export default WalletCard;
+
 
