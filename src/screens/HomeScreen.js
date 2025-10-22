@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
@@ -41,7 +42,12 @@ const HomeScreen = ({ navigation }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [generatingWallet, setGeneratingWallet] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [sendModalVisible, setSendModalVisible] = useState(false);
+  const [sendAddress, setSendAddress] = useState('');
+  const [sendAmount, setSendAmount] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const didToggleRef = useRef(false);
 
   const handleToggleConnection = useCallback(() => {
@@ -59,7 +65,9 @@ const HomeScreen = ({ navigation }) => {
       return;
     }
 
-    Alert.alert('Enviar BTC', 'Funcionalidade de envio de BTC em desenvolvimento.');
+    setSendAddress('');
+    setSendAmount('');
+    setSendModalVisible(true);
   }, [address, isOnline, showFeedback]);
 
   const handleReceiveBitcoin = useCallback(() => {
@@ -69,7 +77,106 @@ const HomeScreen = ({ navigation }) => {
     }
 
     setReceiveModalVisible(true);
-  }, [address]);
+  }, [address, showFeedback]);
+
+  const handleCloseSendModal = useCallback(() => {
+    setIsScanning(false);
+    setSendModalVisible(false);
+    setSendAddress('');
+    setSendAmount('');
+  }, []);
+
+  const handleScanQrCode = useCallback(async () => {
+    try {
+      if (!cameraPermission?.granted) {
+        if (!requestCameraPermission) {
+          showFeedback('error', 'Camera nao disponivel neste dispositivo.');
+          return;
+        }
+
+        const permission = await requestCameraPermission();
+        if (!permission?.granted) {
+          showFeedback('error', 'Permissao de camera negada.');
+          return;
+        }
+      }
+
+      setIsScanning(true);
+    } catch (error) {
+      console.error('Erro ao solicitar permissao da camera', error);
+      showFeedback('error', 'Nao foi possivel acessar a camera do dispositivo.');
+    }
+  }, [cameraPermission, requestCameraPermission, showFeedback]);
+
+  const handleQrCodeScanned = useCallback(
+    ({ data }) => {
+      if (!isScanning) {
+        return;
+      }
+
+      if (!data) {
+        showFeedback('error', 'QR Code invalido.');
+        return;
+      }
+
+      let extractedAddress = data.trim();
+      let extractedAmount = null;
+
+      if (extractedAddress.toLowerCase().startsWith('bitcoin:')) {
+        const withoutScheme = extractedAddress.slice('bitcoin:'.length);
+        const [addressPart, queryPart] = withoutScheme.split('?');
+        extractedAddress = addressPart?.trim() ?? '';
+
+        if (queryPart) {
+          queryPart.split('&').forEach((pair) => {
+            const [rawKey, rawValue] = pair.split('=');
+            if (!rawKey || !rawValue) {
+              return;
+            }
+
+            const key = rawKey.trim().toLowerCase();
+            const value = decodeURIComponent(rawValue.trim());
+
+            if (key === 'amount' && value) {
+              extractedAmount = value;
+            }
+          });
+        }
+      }
+
+      if (!extractedAddress) {
+        showFeedback('error', 'QR Code nao contem um endereco valido.');
+        return;
+      }
+
+      setSendAddress(extractedAddress);
+      if (extractedAmount) {
+        setSendAmount(extractedAmount);
+      }
+
+      setIsScanning(false);
+      showFeedback('success', 'Endereco preenchido via QR Code.');
+    },
+    [isScanning, setSendAddress, setSendAmount, showFeedback],
+  );
+
+  const handleCancelScan = useCallback(() => {
+    setIsScanning(false);
+  }, []);
+
+  const handleSubmitSend = useCallback(() => {
+    if (!isOnline) {
+      showFeedback('error', 'Ative o modo online para enviar BTC.');
+      return;
+    }
+
+    if (!sendAddress.trim() || !sendAmount.trim()) {
+      showFeedback('error', 'Informe o endereco de destino e a quantidade de BTC.');
+      return;
+    }
+
+    Alert.alert('Enviar BTC', 'Fluxo de envio de BTC em desenvolvimento.');
+  }, [isOnline, sendAddress, sendAmount, showFeedback]);
 
   const qrCodeUri = useMemo(() => {
     if (!address) {
@@ -403,28 +510,106 @@ const HomeScreen = ({ navigation }) => {
       </View>
     ) : null}
       <Modal
+        visible={sendModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseSendModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Enviar BTC</Text>
+            {isScanning ? (
+              <>
+                <View style={styles.qrScannerContainer}>
+                  <CameraView
+                    style={styles.qrScanner}
+                    facing="back"
+                    barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                    onBarcodeScanned={handleQrCodeScanned}
+                  />
+                </View>
+                <Text style={styles.qrScannerHint}>Aponte para o QR Code do destinatario</Text>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.qrScannerCancel}
+                  onPress={handleCancelScan}
+                >
+                  <Text style={styles.qrScannerCancelText}>Cancelar leitura</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.sendModalOptions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={handleScanQrCode}
+                  >
+                    <Feather name="camera" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Ler QR Code</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.modalDividerText}>Ou informe manualmente</Text>
+                <TextInput
+                  value={sendAddress}
+                  onChangeText={setSendAddress}
+                  placeholder="Endereco do destinatario"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={styles.modalInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  value={sendAmount}
+                  onChangeText={setSendAmount}
+                  placeholder="Quantidade de BTC"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={styles.modalInput}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                />
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalPrimaryButton}
+                  onPress={handleSubmitSend}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>Enviar</Text>
+                </TouchableOpacity>
+              </>
+            )}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={styles.modalClose}
+              onPress={handleCloseSendModal}
+            >
+              <Text style={styles.modalCloseText}>Fechar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <Modal
         visible={receiveModalVisible}
         transparent
         animationType="fade"
         onRequestClose={() => setReceiveModalVisible(false)}
       >
-        <View style={styles.receiveModalBackdrop}>
-          <View style={styles.receiveModalCard}>
-            <Text style={styles.receiveModalTitle}>Receber BTC</Text>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Receber BTC</Text>
             {qrCodeUri ? (
               <Image source={{ uri: qrCodeUri }} style={styles.receiveModalQr} resizeMode="contain" />
             ) : (
-              <Text style={styles.receiveModalFallback}>Endereco da carteira indisponivel.</Text>
+              <Text style={styles.modalFallback}>Endereco da carteira indisponivel.</Text>
             )}
-            <Text style={styles.receiveModalAddress} selectable>
+            <Text style={styles.modalAddress} selectable>
               {address}
             </Text>
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.receiveModalClose}
+              style={styles.modalClose}
               onPress={() => setReceiveModalVisible(false)}
             >
-              <Text style={styles.receiveModalCloseText}>Fechar</Text>
+              <Text style={styles.modalCloseText}>Fechar</Text>
             </TouchableOpacity>
           </View>
         </View>

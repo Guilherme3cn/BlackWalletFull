@@ -22,10 +22,17 @@
       },
       "adaptiveIcon": {
         "backgroundColor": "#000000"
-      }
+      },
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "package": "com.guilherme3cn.blackvaultwallet"
     },
     "web": {
       "bundler": "metro"
-    }
+    },
+    "plugins": [
+      "expo-camera"
+    ]
   }
 }

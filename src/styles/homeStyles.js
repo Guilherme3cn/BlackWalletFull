@@ -85,14 +85,14 @@ export const homeStyles = StyleSheet.create({
   receiveButton: {
     backgroundColor: '#035820ff',
   },
-  receiveModalBackdrop: {
+  modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: spacing.lg,
   },
-  receiveModalCard: {
+  modalCard: {
     width: '100%',
     backgroundColor: colors.secondary,
     borderRadius: radius.lg,
@@ -102,10 +102,40 @@ export const homeStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  receiveModalTitle: {
+  modalTitle: {
     color: colors.primary,
     fontSize: typography.headline,
     fontWeight: '700',
+  },
+  qrScannerContainer: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  qrScanner: {
+    width: '100%',
+    height: '100%',
+  },
+  qrScannerHint: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+    textAlign: 'center',
+  },
+  qrScannerCancel: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.muted,
+    alignItems: 'center',
+  },
+  qrScannerCancelText: {
+    color: colors.foreground,
+    fontWeight: '600',
+    fontSize: typography.small,
   },
   receiveModalQr: {
     width: 240,
@@ -113,25 +143,77 @@ export const homeStyles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.background,
   },
-  receiveModalFallback: {
+  modalFallback: {
     color: colors.mutedForeground,
     textAlign: 'center',
     fontSize: typography.small,
   },
-  receiveModalAddress: {
+  modalAddress: {
     color: colors.foreground,
     fontSize: typography.small,
     textAlign: 'center',
     paddingHorizontal: spacing.sm,
   },
-  receiveModalClose: {
+  sendModalOptions: {
+    width: '100%',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  modalOptionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  modalOptionButtonText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  modalDividerText: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+    textAlign: 'center',
+  },
+  modalInput: {
+    width: '100%',
+    backgroundColor: colors.background,
+    color: colors.foreground,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    fontSize: typography.body,
+  },
+  modalPrimaryButton: {
+    width: '100%',
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+  },
+  modalPrimaryButtonText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.body,
+  },
+  modalClose: {
     marginTop: spacing.sm,
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.md,
     backgroundColor: colors.primary,
+    alignItems: 'center',
   },
-  receiveModalCloseText: {
+  modalCloseText: {
     color: colors.primaryText,
     fontWeight: '600',
     fontSize: typography.small,
