@@ -188,6 +188,9 @@ export const homeStyles = StyleSheet.create({
     borderColor: colors.primary,
     backgroundColor: colors.primary,
   },
+  modalOptionButtonDisabled: {
+    opacity: 0.6,
+  },
   modalOptionButtonText: {
     color: colors.primaryText,
     fontWeight: '600',
@@ -300,6 +303,20 @@ export const homeStyles = StyleSheet.create({
     fontSize: typography.tiny,
     textAlign: 'right',
   },
+  sendErrorText: {
+    width: '100%',
+    marginTop: spacing.sm,
+    color: colors.danger,
+    fontSize: typography.small,
+    textAlign: 'center',
+  },
+  sendSuccessText: {
+    width: '100%',
+    marginTop: spacing.sm,
+    color: colors.primary,
+    fontSize: typography.small,
+    textAlign: 'center',
+  },
   modalInput: {
     width: '100%',
     backgroundColor: colors.background,
@@ -318,6 +335,9 @@ export const homeStyles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.primary,
     alignItems: 'center',
+  },
+  modalPrimaryButtonDisabled: {
+    opacity: 0.6,
   },
   modalPrimaryButtonText: {
     color: colors.primaryText,

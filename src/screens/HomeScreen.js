@@ -3,7 +3,14 @@ import { Alert, ActivityIndicator, Image, Modal, ScrollView, Text, TextInput, To
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
-import { formatBitcoinAmount, generateBitcoinAddress, generateSeedPhrase, getAddressBalance } from '../utils/crypto';
+import {
+  SATOSHIS_IN_BTC,
+  formatBitcoinAmount,
+  generateBitcoinAddress,
+  generateSeedPhrase,
+  getAddressBalance,
+  sendBitcoinTransaction,
+} from '../utils/crypto';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { homeStyles as styles } from '../styles/homeStyles';
 import { Feather } from '@expo/vector-icons';
@@ -13,7 +20,6 @@ const WALLET_DATA_KEY = 'bitcoin-wallet-data';
 const PASSWORD_KEY = 'wallet-password';
 const FEE_REFRESH_INTERVAL = 60000;
 const ESTIMATED_TX_SIZE_VBYTES = 110;
-const SATOSHIS_IN_BTC = 100000000;
 const FEE_API_URL = 'https://mempool.space/api/v1/fees/recommended';
 
 const fetchBtcUsdPrice = async () => {
@@ -49,17 +55,20 @@ const HomeScreen = ({ navigation }) => {
   const [sendAddress, setSendAddress] = useState('');
   const [sendAmount, setSendAmount] = useState('');
   const [sendPercentage, setSendPercentage] = useState(null);
+  const [sendStatus, setSendStatus] = useState(null);
   const [feeRate, setFeeRate] = useState(null);
   const [feeProfile, setFeeProfile] = useState('fastest');
   const [feeUpdating, setFeeUpdating] = useState(false);
   const [feeError, setFeeError] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
+  const [sendingTransaction, setSendingTransaction] = useState(false);
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
   const [cameraModule, setCameraModule] = useState(null);
   const [cameraModuleError, setCameraModuleError] = useState(null);
   const didToggleRef = useRef(false);
   const cameraModuleRef = useRef(null);
   const feeIntervalRef = useRef(null);
+  const sendStatusTimeoutRef = useRef(null);
   const percentageOptions = useMemo(
     () => [
       { label: '25%', value: 0.25 },
@@ -120,6 +129,26 @@ const HomeScreen = ({ navigation }) => {
 
   const CameraComponent = useMemo(() => cameraModule?.CameraView ?? null, [cameraModule]);
 
+  const showFeedback = useCallback((type, message) => {
+    setFeedback({ type, message, timestamp: Date.now() });
+  }, []);
+
+  const busyOverlayMessage = useMemo(() => {
+    if (loadingWallet) {
+      return 'Preparando sua carteira...';
+    }
+    if (generatingWallet) {
+      return 'Gerando nova carteira...';
+    }
+    if (loggingOut) {
+      return 'Saindo da carteira...';
+    }
+    if (sendingTransaction) {
+      return 'Enviando transacao...';
+    }
+    return null;
+  }, [generatingWallet, loadingWallet, loggingOut, sendingTransaction]);
+
   const handleToggleConnection = useCallback(() => {
     setIsOnline((prev) => !prev);
   }, []);
@@ -140,6 +169,7 @@ const HomeScreen = ({ navigation }) => {
     setSendModalVisible(true);
     setSendPercentage(null);
     setFeeProfile('fastest');
+    setSendStatus(null);
   }, [address, isOnline, showFeedback]);
 
   const handleReceiveBitcoin = useCallback(() => {
@@ -159,6 +189,12 @@ const HomeScreen = ({ navigation }) => {
     setSendPercentage(null);
     setFeeProfile('fastest');
     setCameraModuleError(null);
+    setSendingTransaction(false);
+    setSendStatus(null);
+    if (sendStatusTimeoutRef.current) {
+      clearTimeout(sendStatusTimeoutRef.current);
+      sendStatusTimeoutRef.current = null;
+    }
   }, []);
 
   const loadCameraModule = useCallback(async () => {
@@ -178,6 +214,10 @@ const HomeScreen = ({ navigation }) => {
   }, []);
 
   const handleScanQrCode = useCallback(async () => {
+    if (sendingTransaction) {
+      return;
+    }
+
     try {
       const camera = await loadCameraModule();
 
@@ -209,7 +249,7 @@ const HomeScreen = ({ navigation }) => {
       setCameraModuleError('Nao foi possivel acessar a camera do dispositivo.');
       showFeedback('error', 'Nao foi possivel acessar a camera do dispositivo.');
     }
-  }, [loadCameraModule, showFeedback]);
+  }, [loadCameraModule, sendingTransaction, showFeedback]);
 
   const handleQrCodeScanned = useCallback(
     ({ data }) => {
@@ -271,7 +311,12 @@ const HomeScreen = ({ navigation }) => {
   const handleSelectFeeProfile = useCallback(
     (profile) => {
       setFeeProfile(profile);
+      setSendStatus(null);
       if (sendModalVisible) {
+        if (feeIntervalRef.current) {
+          clearInterval(feeIntervalRef.current);
+          feeIntervalRef.current = null;
+        }
         fetchMinerFee();
       }
     },
@@ -333,6 +378,10 @@ const HomeScreen = ({ navigation }) => {
         clearInterval(feeIntervalRef.current);
         feeIntervalRef.current = null;
       }
+      if (sendStatusTimeoutRef.current) {
+        clearTimeout(sendStatusTimeoutRef.current);
+        sendStatusTimeoutRef.current = null;
+      }
       return;
     }
 
@@ -357,9 +406,19 @@ const HomeScreen = ({ navigation }) => {
     };
   }, [fetchMinerFee, feeProfile, isOnline, sendModalVisible]);
 
+  useEffect(() => {
+    return () => {
+      if (sendStatusTimeoutRef.current) {
+        clearTimeout(sendStatusTimeoutRef.current);
+        sendStatusTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   const handleSelectSendPercentage = useCallback(
     (value) => {
       setSendPercentage(value);
+      setSendStatus(null);
       if (!balance || balance <= 0) {
         setSendAmount('0');
         return;
@@ -371,19 +430,111 @@ const HomeScreen = ({ navigation }) => {
     [balance],
   );
 
-  const handleSubmitSend = useCallback(() => {
+  const handleSubmitSend = useCallback(async () => {
+    if (sendingTransaction) {
+      return;
+    }
+
     if (!isOnline) {
-      showFeedback('error', 'Ative o modo online para enviar BTC.');
+      const message = 'Ative o modo online para enviar BTC.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
       return;
     }
 
-    if (!sendAddress.trim() || !sendAmount.trim()) {
-      showFeedback('error', 'Informe o endereco de destino e a quantidade de BTC.');
+    if (!sendAddress.trim()) {
+      const message = 'Informe o endereco de destino.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
       return;
     }
 
-    Alert.alert('Enviar BTC', 'Fluxo de envio de BTC em desenvolvimento.');
-  }, [isOnline, sendAddress, sendAmount, showFeedback]);
+    if (!sendAmount.trim()) {
+      const message = 'Informe a quantidade de BTC a enviar.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!feeRate) {
+      const message = 'Nao foi possivel calcular a taxa de mineracao.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!Array.isArray(seedPhrase) || !seedPhrase.length) {
+      const message = 'Frase semente indisponivel.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!parsedSendAmount || parsedSendAmount <= 0) {
+      const message = 'Quantidade invalida de BTC.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    const totalToSpend = estimatedTotalBtc;
+    if (!Number.isFinite(totalToSpend) || totalToSpend <= 0) {
+      const message = 'Nao foi possivel calcular o total da transacao.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    if (totalToSpend > balance) {
+      const message = `Saldo insuficiente. Disponivel: ${formatBitcoinAmount(balance)} BTC. Necessario: ${formatBitcoinAmount(totalToSpend)} BTC (valor + taxa).`;
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+      return;
+    }
+
+    try {
+      setSendingTransaction(true);
+      setSendStatus(null);
+      const result = await sendBitcoinTransaction({
+        seedPhrase,
+        recipientAddress: sendAddress.trim(),
+        amountBtc: parsedSendAmount,
+        feeRate,
+      });
+
+      const successMessage = `Transferencia enviada com sucesso. TXID: ${result.txid}`;
+      showFeedback('success', successMessage);
+      setSendStatus({ type: 'success', message: successMessage });
+      if (sendStatusTimeoutRef.current) {
+        clearTimeout(sendStatusTimeoutRef.current);
+      }
+      sendStatusTimeoutRef.current = setTimeout(() => {
+        handleCloseSendModal();
+      }, 1500);
+
+      await fetchBalance();
+    } catch (error) {
+      console.error('Erro ao enviar transacao', error);
+      const message = error?.message ?? 'Nao foi possivel enviar a transacao.';
+      showFeedback('error', message);
+      setSendStatus({ type: 'error', message });
+    } finally {
+      setSendingTransaction(false);
+    }
+  }, [
+    balance,
+    estimatedTotalBtc,
+    feeRate,
+    fetchBalance,
+    handleCloseSendModal,
+    isOnline,
+    parsedSendAmount,
+    seedPhrase,
+    sendAddress,
+    sendAmount,
+    sendingTransaction,
+    showFeedback,
+  ]);
 
   const qrCodeUri = useMemo(() => {
     if (!address) {
@@ -401,10 +552,6 @@ const HomeScreen = ({ navigation }) => {
 
     return balance * btcPrice;
   }, [balance, btcPrice]);
-
-  const showFeedback = useCallback((type, message) => {
-    setFeedback({ type, message, timestamp: Date.now() });
-  }, []);
 
   const fetchBalance = useCallback(
     async (targetAddress = address) => {
@@ -685,7 +832,7 @@ const HomeScreen = ({ navigation }) => {
           </View>
         </View>
       ) : null}
-      {loadingWallet || generatingWallet || loggingOut ? (
+      {busyOverlayMessage ? (
         <View
           style={{
             position: 'absolute',
@@ -705,16 +852,12 @@ const HomeScreen = ({ navigation }) => {
               marginTop: 16,
               color: colors.mutedForeground,
               fontSize: 16,
-            textAlign: 'center',
-          }}
-        >
-          {loadingWallet
-            ? 'Preparando sua carteira...'
-            : generatingWallet
-            ? 'Gerando nova carteira...'
-            : 'Saindo da carteira...'}
-        </Text>
-      </View>
+              textAlign: 'center',
+            }}
+          >
+            {busyOverlayMessage}
+          </Text>
+        </View>
     ) : null}
       <Modal
         visible={sendModalVisible}
@@ -761,7 +904,11 @@ const HomeScreen = ({ navigation }) => {
                 <View style={styles.sendModalOptions}>
                   <TouchableOpacity
                     activeOpacity={0.85}
-                    style={styles.modalOptionButton}
+                    disabled={sendingTransaction}
+                    style={[
+                      styles.modalOptionButton,
+                      sendingTransaction ? styles.modalOptionButtonDisabled : null,
+                    ]}
                     onPress={handleScanQrCode}
                   >
                     <Feather name="camera" size={18} color={colors.primaryText} />
@@ -771,42 +918,16 @@ const HomeScreen = ({ navigation }) => {
                 <Text style={styles.modalDividerText}>Ou informe manualmente</Text>
                 <TextInput
                   value={sendAddress}
-                  onChangeText={setSendAddress}
+                  onChangeText={(value) => {
+                    setSendAddress(value);
+                    setSendStatus(null);
+                  }}
                   placeholder="Endereco do destinatario"
                   placeholderTextColor={colors.mutedForeground}
                   style={styles.modalInput}
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                <View style={styles.percentageRow}>
-                  {percentageOptions.map((option) => {
-                    const isActive = sendPercentage === option.value;
-                    const isDisabled = balance <= 0;
-                    return (
-                      <TouchableOpacity
-                        key={option.label}
-                        activeOpacity={0.85}
-                        disabled={isDisabled}
-                        style={[
-                          styles.percentageButton,
-                          isActive ? styles.percentageButtonActive : null,
-                          isDisabled ? styles.percentageButtonDisabled : null,
-                        ]}
-                        onPress={() => handleSelectSendPercentage(option.value)}
-                      >
-                        <Text
-                          style={[
-                            styles.percentageButtonText,
-                            isActive ? styles.percentageButtonTextActive : null,
-                            isDisabled ? styles.percentageButtonTextDisabled : null,
-                          ]}
-                        >
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
                 <View style={styles.feeOptionsRow}>
                   {feeOptions.map((option) => {
                     const isActive = feeProfile === option.key;
@@ -839,6 +960,7 @@ const HomeScreen = ({ navigation }) => {
                   onChangeText={(value) => {
                     setSendAmount(value);
                     setSendPercentage(null);
+                    setSendStatus(null);
                   }}
                   placeholder="Quantidade de BTC"
                   placeholderTextColor={colors.mutedForeground}
@@ -846,6 +968,35 @@ const HomeScreen = ({ navigation }) => {
                   keyboardType="decimal-pad"
                   returnKeyType="done"
                 />
+                <View style={styles.percentageRow}>
+                  {percentageOptions.map((option) => {
+                    const isActive = sendPercentage === option.value;
+                    const isDisabled = balance <= 0;
+                    return (
+                      <TouchableOpacity
+                        key={option.label}
+                        activeOpacity={0.85}
+                        disabled={isDisabled}
+                        style={[
+                          styles.percentageButton,
+                          isActive ? styles.percentageButtonActive : null,
+                          isDisabled ? styles.percentageButtonDisabled : null,
+                        ]}
+                        onPress={() => handleSelectSendPercentage(option.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.percentageButtonText,
+                            isActive ? styles.percentageButtonTextActive : null,
+                            isDisabled ? styles.percentageButtonTextDisabled : null,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
                 <View style={styles.feeInfo}>
                   <View style={styles.feeInfoLine}>
                     <Text style={styles.feeInfoLabel}>Taxa estimada</Text>
@@ -859,7 +1010,7 @@ const HomeScreen = ({ navigation }) => {
                       : feeError
                       ? feeError
                       : feeRate
-                      ? `${feeRate} sat/vByte • ${selectedFeeOption.description}`
+                      ? `${feeRate} sat/vByte - ${selectedFeeOption.description}`
                       : 'Taxa estimada indisponivel.'}
                   </Text>
                   {btcPrice && feeRate ? (
@@ -881,18 +1032,37 @@ const HomeScreen = ({ navigation }) => {
                     </Text>
                   ) : null}
                 </View>
+                {sendStatus ? (
+                  <Text
+                    style={
+                      sendStatus.type === 'success' ? styles.sendSuccessText : styles.sendErrorText
+                    }
+                  >
+                    {sendStatus.message}
+                  </Text>
+                ) : null}
                 <TouchableOpacity
                   activeOpacity={0.85}
-                  style={styles.modalPrimaryButton}
+                  disabled={sendingTransaction}
+                  style={[
+                    styles.modalPrimaryButton,
+                    sendingTransaction ? styles.modalPrimaryButtonDisabled : null,
+                  ]}
                   onPress={handleSubmitSend}
                 >
-                  <Text style={styles.modalPrimaryButtonText}>Enviar</Text>
+                  <Text style={styles.modalPrimaryButtonText}>
+                    {sendingTransaction ? 'Enviando...' : 'Enviar'}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
             <TouchableOpacity
               activeOpacity={0.85}
-              style={styles.modalClose}
+              disabled={sendingTransaction}
+              style={[
+                styles.modalClose,
+                sendingTransaction ? styles.modalPrimaryButtonDisabled : null,
+              ]}
               onPress={handleCloseSendModal}
             >
               <Text style={styles.modalCloseText}>Fechar</Text>
@@ -932,3 +1102,6 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
+
+
+
