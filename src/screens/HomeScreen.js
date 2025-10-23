@@ -1748,41 +1748,11 @@ const discoverWalletUsage = useCallback(
           onRefreshPrice={refreshBtcPrice}
         />
 
-        {addressBalances.length ? (
-          <View style={styles.addressBalancesSection}>
-            <Text style={styles.addressBalancesTitle}>Enderecos monitorados</Text>
-            {addressBalances.map((item) => (
-              <View key={item.address} style={styles.addressBalanceItem}>
-                <View style={styles.addressBalanceHeader}>
-                  <Text style={styles.addressBalanceLabel}>{item.label}</Text>
-                  <Text style={styles.addressBalanceValue}>{formatBitcoinAmount(item.balanceBtc)} BTC</Text>
-                </View>
-                <Text style={styles.addressBalanceAddress} numberOfLines={1} ellipsizeMode="middle">
-                  {item.address}
-                </Text>
-                {item.pendingSat > 0 ? (
-                  <Text style={styles.addressBalancePending}>
-                    Pendente: {formatBitcoinAmount(item.pendingBtc)} BTC
-                  </Text>
-                ) : null}
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  style={styles.addressBalanceLink}
-                  onPress={() => openAddressInExplorer(item.address)}
-                >
-                  <Feather name="external-link" size={14} color={colors.primaryText} />
-                  <Text style={styles.addressBalanceLinkText}>Ver no mempool</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
-        ) : null}
-
-        <View style={styles.quickActions}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={[
-              styles.quickActionButton,
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[
+                styles.quickActionButton,
               styles.sendButton,
               hasPendingIncoming ? styles.quickActionButtonDisabled : null,
             ]}
@@ -1816,7 +1786,7 @@ const discoverWalletUsage = useCallback(
 
         {hasPendingIncoming ? (
           <Text style={styles.pendingNotice}>
-            Transacao recebida pendente (~{formatBitcoinAmount(pendingIncomingBtc)} BTC) aguardando confirmacao.
+            Transação recebida pendente (~{formatBitcoinAmount(pendingIncomingBtc)} BTC) aguardando confirmação.
           </Text>
         ) : null}
 
@@ -1824,15 +1794,45 @@ const discoverWalletUsage = useCallback(
           activeOpacity={0.85}
           style={styles.historyButton}
           onPress={handleOpenHistory}
-        >
-          <Feather name="clock" size={20} color={colors.primaryText} style={styles.historyButtonIcon} />
-          <View style={styles.historyButtonTextContainer}>
-            <Text style={styles.historyButtonTitle}>Historico de transacoes</Text>
-            <Text style={styles.historyButtonSubtitle}>Acompanhe entradas e saidas confirmadas</Text>
-          </View>
-        </TouchableOpacity>
+          >
+            <Feather name="clock" size={20} color={colors.primaryText} style={styles.historyButtonIcon} />
+            <View style={styles.historyButtonTextContainer}>
+              <Text style={styles.historyButtonTitle}>Histórico de transações</Text>
+              <Text style={styles.historyButtonSubtitle}>Acompanhe entradas e saídas confirmadas</Text>
+            </View>
+          </TouchableOpacity>
 
-        <SeedPhrase words={seedPhrase} />
+          {addressBalances.length ? (
+            <View style={styles.addressBalancesSection}>
+              <Text style={styles.addressBalancesTitle}>Endereços monitorados</Text>
+              {addressBalances.map((item) => (
+                <View key={item.address} style={styles.addressBalanceItem}>
+                  <View style={styles.addressBalanceHeader}>
+                    <Text style={styles.addressBalanceLabel}>{item.label}</Text>
+                    <Text style={styles.addressBalanceValue}>{formatBitcoinAmount(item.balanceBtc)} BTC</Text>
+                  </View>
+                  <Text style={styles.addressBalanceAddress} numberOfLines={1} ellipsizeMode="middle">
+                    {item.address}
+                  </Text>
+                  {item.pendingSat > 0 ? (
+                    <Text style={styles.addressBalancePending}>
+                      Pendente: {formatBitcoinAmount(item.pendingBtc)} BTC
+                    </Text>
+                  ) : null}
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    style={styles.addressBalanceLink}
+                    onPress={() => openAddressInExplorer(item.address)}
+                  >
+                    <Feather name="external-link" size={14} color={colors.primaryText} />
+                    <Text style={styles.addressBalanceLinkText}>Ver no mempool</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          <SeedPhrase words={seedPhrase} />
 
         <Text style={styles.disclaimer}>
           ATENCAO: Mantenha sua frase semente em segurança. Nunca compartilhe com terceiros.

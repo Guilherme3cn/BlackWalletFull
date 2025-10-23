@@ -127,19 +127,21 @@ export const homeStyles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.secondary,
+    backgroundColor: '#504f4f85',
   },
   historyButtonIcon: {
     marginRight: 0,
+    color: '#ffffff9f',
   },
   historyButtonTextContainer: {
     flex: 1,
     alignItems: 'flex-start',
     gap: spacing.xs,
+  
   },
   historyButtonTitle: {
-    color: colors.primaryText,
-    fontWeight: '600',
+    color: '#ffffffe1',
+    fontWeight: '400',
     fontSize: typography.body,
   },
   historyButtonSubtitle: {
@@ -486,7 +488,7 @@ export const homeStyles = StyleSheet.create({
   },
   dangerButton: {
     borderColor: '#ffd000ff',
-    backgroundColor: '#ffd000e3',
+    backgroundColor: '#ffd000ea',
     marginLeft: 80,
    
   },

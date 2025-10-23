@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, Alert, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, Linking, ImageBackground } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { formatBitcoinAmount, SATOSHIS_IN_BTC } from '../utils/crypto';
 import { walletCardStyles as styles } from '../styles/walletCardStyles';
@@ -86,7 +86,12 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice }) =>
   }, [balanceDisplayMode, btcPrice, safeBalance, usdValue]);
 
   return (
-    <View style={styles.card}>
+    <ImageBackground
+      source={require('../../assets/images/blackcard.png')}
+      style={styles.card}
+      imageStyle={styles.cardImage}
+      resizeMode="cover"
+    >
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Cold Wallet</Text>
@@ -101,7 +106,6 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice }) =>
           </TouchableOpacity>
         </View>
       </View>
-
       <View style={styles.section}>
         <Text style={styles.label}>Saldo</Text>
         <TouchableOpacity activeOpacity={0.85} onPress={handleCycleBalanceMode}>
@@ -121,7 +125,7 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice }) =>
           </TouchableOpacity>
         </View>
       </View>
-    </View>
+    </ImageBackground>
   );
 };
 
