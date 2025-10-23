@@ -168,6 +168,7 @@ const HomeScreen = ({ navigation }) => {
   const [transactionsLoading, setTransactionsLoading] = useState(false);
   const [transactionsError, setTransactionsError] = useState(null);
   const [addressSummaries, setAddressSummaries] = useState({});
+  const zeroBalanceMapRef = useRef({});
   const didToggleRef = useRef(false);
   const cameraModuleRef = useRef(null);
   const feeIntervalRef = useRef(null);
@@ -249,7 +250,7 @@ const HomeScreen = ({ navigation }) => {
 }, [deriveAddressDetails]);
 
 const discoverWalletUsage = useCallback(
-  async (seedWords, baseWallet, { gapLimit = 10, maxScan = 40 } = {}) => {
+  async (seedWords, baseWallet, { gapLimit = 3, maxScan = 20 } = {}) => {
     if (!Array.isArray(seedWords) || !seedWords.length) {
       return {
         wallet: {
@@ -571,36 +572,79 @@ const discoverWalletUsage = useCallback(
       return [];
     }
 
-    const collections = [
-      ...(walletData.receivingAddresses ?? []).map((item) => ({ ...item, change: false })),
-      ...(walletData.changeAddresses ?? []).map((item) => ({ ...item, change: true })),
-    ];
+    const baseType = walletData.addressType ?? DEFAULT_ADDRESS_TYPE;
+    const entries = new Map();
 
-    return collections
+    (walletData.receivingAddresses ?? []).forEach((item) => {
+      entries.set(item.address, {
+        ...item,
+        change: false,
+        type: item.type ?? baseType,
+        used: Boolean(item.used),
+      });
+    });
+
+    (walletData.changeAddresses ?? []).forEach((item) => {
+      entries.set(item.address, {
+        ...item,
+        change: true,
+        type: item.type ?? baseType,
+        used: Boolean(item.used),
+      });
+    });
+
+    Object.keys(addressSummaries ?? {}).forEach((address) => {
+      if (!entries.has(address)) {
+        entries.set(address, {
+          address,
+          index: entries.size,
+          change: true,
+          type: baseType,
+          used: true,
+        });
+      }
+    });
+
+    return [...entries.values()]
       .map((entry) => {
-        const summary = addressSummaries[entry.address] ?? {};
-        const balanceSat = Number(summary?.balanceSat ?? 0);
+        const summary = addressSummaries?.[entry.address] ?? {};
+        const balanceSat =
+          Number(summary?.balanceSat ?? 0) ||
+          Math.round(Number(summary?.balance ?? 0) * SATOSHIS_IN_BTC);
         const pendingSat = Number(summary?.pendingReceivedSat ?? 0);
+
+        if (!entry.change && !entry.used && balanceSat <= 0 && pendingSat <= 0) {
+          return null;
+        }
 
         if (balanceSat <= 0 && pendingSat <= 0) {
           return null;
         }
 
         const labelPrefix = entry.change ? 'Troco' : 'Recebimento';
-        const label = `${labelPrefix} #${entry.index ?? 0}`;
+        const label =
+          entry.index !== undefined && entry.index !== null
+            ? `${labelPrefix} #${entry.index}`
+            : `${labelPrefix}`;
 
         return {
           address: entry.address,
           label,
           change: entry.change,
-          index: entry.index,
+          index: entry.index ?? 0,
           balanceSat,
           balanceBtc: balanceSat / SATOSHIS_IN_BTC,
           pendingSat,
           pendingBtc: pendingSat / SATOSHIS_IN_BTC,
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.change === b.change) {
+          return (a.index ?? 0) - (b.index ?? 0);
+        }
+        return a.change ? 1 : -1;
+      });
   }, [addressSummaries, walletData]);
 
   const { usd: btcPriceUsd } = btcPrice;
@@ -1238,6 +1282,7 @@ const discoverWalletUsage = useCallback(
         setBalance(0);
         setPendingIncomingSat(0);
         setAddressSummaries({});
+        zeroBalanceMapRef.current = {};
         return;
       }
 
@@ -1250,6 +1295,9 @@ const discoverWalletUsage = useCallback(
         let workingWallet = targetWallet;
         let didUpdate = false;
         const summaryRecords = { ...summaryMap };
+        const now = Date.now();
+        const previousZeroMap = zeroBalanceMapRef.current || {};
+        const nextZeroMap = { ...previousZeroMap };
         const walletSeed = Array.isArray(targetWallet.seedPhrase)
           ? targetWallet.seedPhrase
           : walletDataRef.current?.seedPhrase ?? [];
@@ -1290,12 +1338,28 @@ const discoverWalletUsage = useCallback(
           };
         }
 
-        const hasUnusedReceiving = workingWallet.receivingAddresses.some((item) => !item.used);
-        if (!hasUnusedReceiving && walletSeed.length) {
+        const addressMetadata = new Map();
+        (workingWallet.receivingAddresses ?? []).forEach((item) => {
+          addressMetadata.set(item.address, { change: false, used: Boolean(item.used) });
+        });
+        (workingWallet.changeAddresses ?? []).forEach((item) => {
+          addressMetadata.set(item.address, { change: true, used: Boolean(item.used) });
+        });
+
+        const ensureFreshReceivingAddress = () => {
+          if (!walletSeed.length) {
+            return null;
+          }
+
+          const hasUnused = (workingWallet.receivingAddresses ?? []).some((item) => !item.used);
+          if (hasUnused) {
+            return null;
+          }
+
           const nextIndex =
             Number.isInteger(workingWallet.receivingIndex) && workingWallet.receivingIndex >= 0
               ? workingWallet.receivingIndex
-              : workingWallet.receivingAddresses.length;
+              : (workingWallet.receivingAddresses ?? []).length;
 
           const nextDetails = deriveAddressDetails(walletSeed, {
             type: workingWallet.addressType ?? DEFAULT_ADDRESS_TYPE,
@@ -1314,8 +1378,9 @@ const discoverWalletUsage = useCallback(
           workingWallet = {
             ...workingWallet,
             receivingIndex: nextIndex + 1,
-            receivingAddresses: [...workingWallet.receivingAddresses, newReceivingEntry],
+            receivingAddresses: [...(workingWallet.receivingAddresses ?? []), newReceivingEntry],
           };
+
           summaryRecords[newReceivingEntry.address] = {
             address: newReceivingEntry.address,
             balance: 0,
@@ -1324,23 +1389,91 @@ const discoverWalletUsage = useCallback(
             totalReceivedSat: 0,
             hasActivity: false,
           };
+
+          addressMetadata.set(newReceivingEntry.address, { change: false, used: false });
           didUpdate = true;
+          return newReceivingEntry.address;
+        };
+
+        ensureFreshReceivingAddress();
+
+        const filteredSummaryRecords = {};
+        const addressesToArchive = new Set();
+        Object.entries(summaryRecords).forEach(([address, summary]) => {
+          const metadata = addressMetadata.get(address);
+          const shouldArchive = metadata ? metadata.change || Boolean(metadata.used) : true;
+          const balanceSat =
+            Number(summary?.balanceSat ?? 0) ||
+            Math.round(Number(summary?.balance ?? 0) * SATOSHIS_IN_BTC);
+          const pendingSat = Number(summary?.pendingReceivedSat ?? 0);
+          const hasValue =
+            balanceSat > 0 ||
+            pendingSat > 0 ||
+            Number(summary?.totalReceivedSat ?? 0) > 0 ||
+            summary?.hasActivity;
+
+          if (hasValue) {
+            filteredSummaryRecords[address] = summary;
+            return;
+          }
+
+          const previousTimestamp = previousZeroMap[address];
+          if (shouldArchive && previousTimestamp && now - previousTimestamp >= 60000) {
+            addressesToArchive.add(address);
+            return;
+          }
+
+          if (shouldArchive) {
+            nextZeroMap[address] = previousTimestamp ?? now;
+          }
+
+          filteredSummaryRecords[address] = summary;
+        });
+
+        if (addressesToArchive.size) {
+          const filteredReceiving = (workingWallet.receivingAddresses ?? []).filter(
+            (item) => !addressesToArchive.has(item.address),
+          );
+          const filteredChange = (workingWallet.changeAddresses ?? []).filter(
+            (item) => !addressesToArchive.has(item.address),
+          );
+
+          if (
+            filteredReceiving.length !== (workingWallet.receivingAddresses ?? []).length ||
+            filteredChange.length !== (workingWallet.changeAddresses ?? []).length
+          ) {
+            workingWallet = {
+              ...workingWallet,
+              receivingAddresses: filteredReceiving,
+              changeAddresses: filteredChange,
+            };
+            didUpdate = true;
+          }
+        }
+
+        const newAddressAfterCleanup = ensureFreshReceivingAddress();
+        if (newAddressAfterCleanup && !filteredSummaryRecords[newAddressAfterCleanup]) {
+          filteredSummaryRecords[newAddressAfterCleanup] = summaryRecords[newAddressAfterCleanup];
         }
 
         const finalReceiving = workingWallet.receivingAddresses ?? [];
         const pendingIncomingSatForReceiving = finalReceiving.reduce((total, entry) => {
-          const summary = summaryRecords[entry.address];
+          const summary = filteredSummaryRecords[entry.address];
+          if (!summary) {
+            return total;
+          }
           return total + Number(summary?.pendingReceivedSat ?? 0);
         }, 0);
 
-        const aggregatedBalance = Object.values(summaryRecords).reduce(
+        const aggregatedBalance = Object.values(filteredSummaryRecords).reduce(
           (total, summary) => total + Number(summary?.balance ?? 0),
           0,
         );
 
         setBalance(aggregatedBalance || initialBalance);
         setPendingIncomingSat(pendingIncomingSatForReceiving);
-        setAddressSummaries(summaryRecords);
+        setAddressSummaries(filteredSummaryRecords);
+        zeroBalanceMapRef.current = nextZeroMap;
 
         if (didUpdate) {
           await persistWalletData(workingWallet);
@@ -1350,6 +1483,7 @@ const discoverWalletUsage = useCallback(
         showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
         setAddressSummaries({});
         setPendingIncomingSat(0);
+        zeroBalanceMapRef.current = {};
       }
     },
     [isOnline, persistWalletData, deriveAddressDetails, showFeedback],
@@ -1437,26 +1571,43 @@ const discoverWalletUsage = useCallback(
     try {
       const storedData = await AsyncStorage.getItem(WALLET_DATA_KEY);
 
-      if (storedData) {
-        const parsed = JSON.parse(storedData);
-        const normalized = buildWalletState(parsed.seedPhrase || [], parsed);
-        setWalletData(normalized);
-
-        if (!parsed.receivingAddresses) {
-          await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
-        }
-
-        await fetchWalletBalance(normalized);
-      } else {
+      if (!storedData) {
         await regenerateWallet(true);
+        return;
       }
+
+      const parsed = JSON.parse(storedData);
+      let normalized = buildWalletState(parsed.seedPhrase || [], parsed);
+      let initialSummaries = {};
+      let initialPendingSat = 0;
+
+      if (!normalized.discoveryComplete) {
+        try {
+          const discovery = await discoverWalletUsage(normalized.seedPhrase, normalized);
+          normalized = discovery.wallet;
+          initialSummaries = discovery.summaryMap;
+          initialPendingSat = discovery.pendingReceivedSat;
+        } catch (discoveryError) {
+          console.error('Erro ao descobrir enderecos utilizados', discoveryError);
+        }
+      }
+
+      setWalletData(normalized);
+      zeroBalanceMapRef.current = {};
+      if (Object.keys(initialSummaries).length) {
+        setAddressSummaries(initialSummaries);
+        setPendingIncomingSat(initialPendingSat);
+      }
+
+      await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
+      await fetchWalletBalance(normalized);
     } catch (error) {
       Alert.alert('Erro', 'Nao foi possivel carregar os dados da carteira.');
       console.error('Erro carregando carteira', error);
     } finally {
       setLoadingWallet(false);
     }
-  }, [buildWalletState, fetchWalletBalance, regenerateWallet]);
+  }, [buildWalletState, discoverWalletUsage, fetchWalletBalance, regenerateWallet]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -1670,8 +1821,11 @@ const discoverWalletUsage = useCallback(
           style={styles.historyButton}
           onPress={handleOpenHistory}
         >
-          <Feather name="clock" size={18} color={colors.primaryText} style={styles.historyButtonIcon} />
-          <Text style={styles.historyButtonText}>Historico de transacoes</Text>
+          <Feather name="clock" size={20} color={colors.primaryText} style={styles.historyButtonIcon} />
+          <View style={styles.historyButtonTextContainer}>
+            <Text style={styles.historyButtonTitle}>Historico de transacoes</Text>
+            <Text style={styles.historyButtonSubtitle}>Acompanhe entradas e saidas confirmadas</Text>
+          </View>
         </TouchableOpacity>
 
         <SeedPhrase words={seedPhrase} />

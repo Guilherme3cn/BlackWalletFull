@@ -120,9 +120,10 @@ export const homeStyles = StyleSheet.create({
     marginTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     gap: spacing.sm,
     paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -131,10 +132,19 @@ export const homeStyles = StyleSheet.create({
   historyButtonIcon: {
     marginRight: 0,
   },
-  historyButtonText: {
+  historyButtonTextContainer: {
+    flex: 1,
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  historyButtonTitle: {
     color: colors.primaryText,
     fontWeight: '600',
     fontSize: typography.body,
+  },
+  historyButtonSubtitle: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
   },
   quickActionButton: {
     flex: 1,
