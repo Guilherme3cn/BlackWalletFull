@@ -1481,6 +1481,10 @@ const discoverWalletUsage = useCallback(
       } catch (error) {
         console.error('Erro ao atualizar saldo da carteira', error);
         showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
+        if (isOnline) {
+          setIsOnline(false);
+          showFeedback('info', 'Conexao indisponivel. Alternando para modo offline.');
+        }
         setAddressSummaries({});
         setPendingIncomingSat(0);
         zeroBalanceMapRef.current = {};
