@@ -15,6 +15,7 @@ export const walletCardStyles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     elevation: 12,
     overflow: 'hidden',
+    width: 350,
   },
   cardImage: {
     borderRadius: radius.lg,
