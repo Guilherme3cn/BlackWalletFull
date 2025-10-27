@@ -697,7 +697,49 @@ const discoverWalletUsage = useCallback(
     [feeOptions, feeProfile],
   );
 
-  const CameraComponent = useMemo(() => cameraModule?.CameraView ?? null, [cameraModule]);
+  const cameraSupport = useMemo(() => {
+    if (!cameraModule) {
+      return null;
+    }
+
+    if (cameraModule.CameraView) {
+      return {
+        Component: cameraModule.CameraView,
+        getProps: (handler) => ({
+          style: styles.qrScanner,
+          facing: 'back',
+          barcodeScannerSettings: { barcodeTypes: ['qr'] },
+          onBarcodeScanned: handler,
+        }),
+      };
+    }
+
+    if (cameraModule.Camera) {
+      const LegacyCamera = cameraModule.Camera;
+      const legacyType =
+        cameraModule.CameraType?.back ??
+        cameraModule.Camera.Constants?.Type?.back ??
+        cameraModule.Constants?.Type?.back ??
+        undefined;
+
+      const qrType =
+        cameraModule?.BarCodeScanner?.Constants?.BarCodeType?.qr ??
+        cameraModule?.Camera?.Constants?.BarCodeType?.qr ??
+        'qr';
+
+      return {
+        Component: LegacyCamera,
+        getProps: (handler) => ({
+          style: styles.qrScanner,
+          type: legacyType,
+          barCodeScannerSettings: { barCodeTypes: [qrType] },
+          onBarCodeScanned: handler,
+        }),
+      };
+    }
+
+    return null;
+  }, [cameraModule]);
 
   const showFeedback = useCallback((type, message) => {
     setFeedback({ type, message, timestamp: Date.now() });
@@ -801,7 +843,10 @@ const discoverWalletUsage = useCallback(
       const camera = await loadCameraModule();
 
       const requestPermission =
-        camera?.requestCameraPermissionsAsync ?? camera?.Camera?.requestPermissionsAsync;
+        camera?.Camera?.requestCameraPermissionsAsync ??
+        camera?.Camera?.requestPermissionsAsync ??
+        camera?.requestCameraPermissionsAsync ??
+        camera?.requestPermissionsAsync;
 
       if (!requestPermission) {
         showFeedback('error', 'Camera nao disponivel neste dispositivo.');
@@ -815,7 +860,10 @@ const discoverWalletUsage = useCallback(
         return;
       }
 
-      if (!camera?.CameraView) {
+      const hasCameraView = Boolean(camera?.CameraView);
+      const hasLegacyCamera = Boolean(camera?.Camera);
+
+      if (!hasCameraView && !hasLegacyCamera) {
         showFeedback('error', 'Leitor de QR Code indisponivel neste dispositivo.');
         setCameraModuleError('Leitor de QR Code indisponivel neste dispositivo.');
         return;
@@ -882,6 +930,10 @@ const discoverWalletUsage = useCallback(
     },
     [isScanning, setSendAddress, setSendAmount, showFeedback],
   );
+
+  const CameraComponent = cameraSupport?.Component ?? null;
+  const cameraComponentProps =
+    CameraComponent && cameraSupport ? cameraSupport.getProps(handleQrCodeScanned) : null;
 
   const handleCancelScan = useCallback(() => {
     setIsScanning(false);
@@ -1745,6 +1797,7 @@ const discoverWalletUsage = useCallback(
           balance={balance}
           usdValue={usdValue}
           btcPrice={btcPrice}
+          isRefreshing={priceRefreshing}
           onRefreshPrice={refreshBtcPrice}
         />
 
@@ -1888,7 +1941,7 @@ const discoverWalletUsage = useCallback(
             {busyOverlayMessage}
           </Text>
         </View>
-    ) : null}
+      ) : null}
       <Modal
         visible={sendModalVisible}
         transparent
@@ -1900,15 +1953,10 @@ const discoverWalletUsage = useCallback(
             <Text style={styles.modalTitle}>Enviar BTC</Text>
             {isScanning ? (
               <>
-                {CameraComponent ? (
+                {CameraComponent && cameraComponentProps ? (
                   <>
                     <View style={styles.qrScannerContainer}>
-                      <CameraComponent
-                        style={styles.qrScanner}
-                        facing="back"
-                        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                        onBarcodeScanned={handleQrCodeScanned}
-                      />
+                      <CameraComponent {...cameraComponentProps} />
                     </View>
                     <Text style={styles.qrScannerHint}>Aponte para o QR Code do destinatario</Text>
                   </>
