@@ -1531,9 +1531,17 @@ const discoverWalletUsage = useCallback(
           await persistWalletData(workingWallet);
         }
       } catch (error) {
+        console.error('Erro ao atualizar saldo da carteira', error);
+        const errorMessage = typeof error?.message === 'string' ? error.message : '';
+        const isRateLimited = errorMessage.includes('status 429');
+
+        if (isRateLimited) {
+          showFeedback('error', 'Limite de requisicoes atingido. Aguarde alguns instantes e tente novamente.');
+          return;
+        }
+
         if (isOnline) {
-          setIsOnline(false);
-          showFeedback('info', 'Conexao indisponivel. Alternando para modo offline.');
+          showFeedback('error', 'Nao foi possivel atualizar o saldo no momento. Verifique sua conexao.');
         } else {
           showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
         }

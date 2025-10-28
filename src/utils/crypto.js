@@ -35,6 +35,7 @@ const HD_ADDRESS_TYPES = {
 export const DEFAULT_ADDRESS_TYPE = 'bech32';
 const BITCOIN_NETWORK = bitcoin.networks.bitcoin;
 const BLOCKSTREAM_API_BASE = 'https://blockstream.info/api';
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const MIN_CHANGE_VALUE = 546; // dust threshold in satoshis
 const DEFAULT_TX_VERSION = 2;
 const DEFAULT_SEQUENCE = 0xffffffff;
@@ -254,7 +255,12 @@ export const fetchAddressSummary = async (address) => {
   const response = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}`);
 
   if (!response.ok) {
-    throw new Error(`Balance request failed with status ${response.status}`);
+    const error = new Error(`Balance request failed with status ${response.status}`);
+    error.status = response.status;
+    if (response.status === 429) {
+      error.code = 'RATE_LIMITED';
+    }
+    throw error;
   }
 
   const data = await response.json();
@@ -305,12 +311,33 @@ export const getWalletAddressesBalance = async (addresses = []) => {
     };
   }
 
-  const summaries = await Promise.all(
-    addresses.map(async (entry) => {
-      const summary = await fetchAddressSummary(entry.address);
-      return summary;
-    }),
-  );
+  const summaries = [];
+  const MAX_ATTEMPTS = 4;
+  const BASE_DELAY_MS = 500;
+
+  for (const entry of addresses) {
+    let attempt = 0;
+    while (attempt < MAX_ATTEMPTS) {
+      try {
+        const summary = await fetchAddressSummary(entry.address);
+        summaries.push(summary);
+        await wait(120);
+        break;
+      } catch (error) {
+        attempt += 1;
+        const retryable =
+          (error?.status === 429 || error?.code === 'RATE_LIMITED') && attempt < MAX_ATTEMPTS;
+
+        if (retryable) {
+          const backoff = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          await wait(backoff);
+          continue;
+        }
+
+        throw error;
+      }
+    }
+  }
 
   const balance = summaries.reduce((total, item) => total + item.balance, 0);
   const summaryMap = summaries.reduce((acc, item) => {
