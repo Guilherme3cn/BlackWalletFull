@@ -38,6 +38,38 @@ export const signStyles = StyleSheet.create({
   form: {
     gap: spacing.sm,
   },
+  modeSection: {
+    gap: spacing.xs,
+  },
+  modeButtonsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.muted,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+  },
+  modeButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  modeButtonText: {
+    color: colors.foreground,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  modeButtonTextActive: {
+    color: colors.primaryText,
+  },
+  modeDescription: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
   label: {
     color: colors.foreground,
     fontSize: typography.small,
@@ -57,6 +89,9 @@ export const signStyles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
     alignItems: 'center',
+  },
+  disabled: {
+    opacity: 0.6,
   },
   primaryButtonText: {
     color: colors.primaryText,

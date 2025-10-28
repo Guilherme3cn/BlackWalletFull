@@ -55,6 +55,9 @@ export const walletCardStyles = StyleSheet.create({
     marginTop: -20,
     marginEnd: 10
   },
+  iconButtonDisabled: {
+    opacity: 0.4,
+  },
   iconText: {
     color: colors.primary,
     fontSize: typography.body,

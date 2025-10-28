@@ -6,6 +6,7 @@ import { ripemd160 } from '@noble/hashes/ripemd160';
 import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { Buffer } from 'buffer';
+import bs58check from 'bs58check';
 
 if (typeof globalThis.Buffer === 'undefined') {
   globalThis.Buffer = Buffer;
@@ -136,6 +137,13 @@ const getDerivationPath = ({ type, change, index }) => {
   return `m/${config.purpose}'/0'/${accountIndex}'/${changeIndex}/${index}`;
 };
 
+const getAccountDerivationPath = (type) => {
+  const normalized = normalizeAddressType(type);
+  const config = HD_ADDRESS_TYPES[normalized];
+  const accountIndex = 0;
+  return `m/${config.purpose}'/0'/${accountIndex}'`;
+};
+
 const deriveWalletNode = (seedPhrase, path) => {
   const mnemonic = seedPhrase.join(' ');
   const seed = mnemonicToSeedSync(mnemonic);
@@ -153,18 +161,43 @@ const deriveWalletNode = (seedPhrase, path) => {
   return child;
 };
 
-const getWalletDetails = (seedPhrase, options = {}) => {
-  if (!Array.isArray(seedPhrase) || seedPhrase.length === 0) {
-    throw new Error('Seed phrase is required for derivation.');
+const deriveNodeFromAccountXpub = (accountXpub, { change, index }) => {
+  if (!accountXpub) {
+    throw new Error('Account xpub must be provided for public derivation.');
   }
 
+  let accountNode;
+  try {
+    accountNode = HDKey.fromExtendedKey(accountXpub);
+  } catch (error) {
+    throw new Error('Account xpub invalido. Verifique se esta completo e pertence a esta carteira.');
+  }
+
+  const branchNode = accountNode.derive(change ? 1 : 0);
+  const child = branchNode.derive(index);
+
+  if (!child?.publicKey) {
+    throw new Error('Unable to derive public key from account xpub');
+  }
+
+  return child;
+};
+
+const getWalletDetails = (seedPhrase, options = {}) => {
   const normalizedType = normalizeAddressType(options.type);
   const change = Boolean(options.change);
   const index = Number.isInteger(options.index) ? options.index : 0;
   const path = getDerivationPath({ type: normalizedType, change, index });
-  const child = deriveWalletNode(seedPhrase, path);
+  const hasSeed = Array.isArray(seedPhrase) && seedPhrase.length > 0;
+  const accountXpub = options.accountXpub;
+
+  if (!hasSeed && !accountXpub) {
+    throw new Error('Seed phrase or account xpub is required for derivation.');
+  }
+
+  const child = hasSeed ? deriveWalletNode(seedPhrase, path) : deriveNodeFromAccountXpub(accountXpub, { change, index });
   const publicKey = child.publicKey;
-  const privateKey = child.privateKey;
+  const privateKey = child.privateKey ?? null;
   const pubKeyHash = hash160(publicKey);
   const payment = HD_ADDRESS_TYPES[normalizedType].getPayment(Buffer.from(publicKey), BITCOIN_NETWORK);
 
@@ -182,6 +215,7 @@ const getWalletDetails = (seedPhrase, options = {}) => {
     pubKeyHash,
     outputScript: Uint8Array.from(outputScript),
     path,
+    accountPath: getAccountDerivationPath(normalizedType),
     type: normalizedType,
     change,
     index,
@@ -190,7 +224,7 @@ const getWalletDetails = (seedPhrase, options = {}) => {
 
 export const deriveAddressDetails = (seedPhrase, options = {}) => {
   const details = getWalletDetails(seedPhrase, options);
-  const { address, index, change, type, path } = details;
+  const { address, index, change, type, path, accountPath } = details;
 
   return {
     address,
@@ -198,6 +232,84 @@ export const deriveAddressDetails = (seedPhrase, options = {}) => {
     change,
     type,
     path,
+    accountPath,
+  };
+};
+
+const formatFingerprint = (fingerprint) => fingerprint.toString(16).padStart(8, '0');
+
+const SLIP132_MAP = {
+  ypub: { targetVersion: 0x0488b21e },
+  zpub: { targetVersion: 0x0488b21e },
+  Ypub: { targetVersion: 0x0488b21e },
+  Zpub: { targetVersion: 0x0488b21e },
+  upub: { targetVersion: 0x043587cf },
+  vpub: { targetVersion: 0x043587cf },
+  Upub: { targetVersion: 0x043587cf },
+  Vpub: { targetVersion: 0x043587cf },
+};
+
+export const normalizeAccountXpubInput = (rawInput = '', { type = DEFAULT_ADDRESS_TYPE } = {}) => {
+  if (typeof rawInput !== 'string') {
+    throw new Error('xpub invalido.');
+  }
+
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const base58Alphabet = /[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+/g;
+  const matches = trimmed.match(base58Alphabet);
+  if (!matches || !matches.length) {
+    throw new Error('xpub invalido.');
+  }
+
+  // Escolhe o maior trecho base58 encontrado (assuming ser o xpub/zpub)
+  const candidate = matches.reduce((longest, current) => (current.length > longest.length ? current : longest), '');
+  if (!candidate.startsWith('xpub') && !candidate.startsWith('tpub') && !SLIP132_MAP[candidate.slice(0, 4)]) {
+    throw new Error('xpub invalido ou formato nao suportado.');
+  }
+
+  const prefix = candidate.slice(0, 4);
+  const mapping = SLIP132_MAP[prefix];
+  if (!mapping) {
+    return candidate;
+  }
+
+  try {
+    const data = bs58check.decode(candidate);
+    const targetVersion =
+      mapping.targetVersion ?? (type === 'bech32' ? 0x0488b21e : 0x0488b21e); // fallback para xpub mainnet
+    const buffer = Buffer.from(data);
+    buffer.writeUInt32BE(targetVersion, 0);
+    return bs58check.encode(buffer);
+  } catch (error) {
+    throw new Error('xpub invalido ou corrompido.');
+  }
+};
+
+export const deriveAccountKeysFromSeed = (seedPhrase, options = {}) => {
+  if (!Array.isArray(seedPhrase) || !seedPhrase.length) {
+    throw new Error('Seed phrase is required to derive account keys.');
+  }
+
+  const normalizedType = normalizeAddressType(options.type);
+  const accountPath = getAccountDerivationPath(normalizedType);
+  const mnemonic = seedPhrase.join(' ');
+  const seed = mnemonicToSeedSync(mnemonic);
+  const master = HDKey.fromMasterSeed(seed);
+  const accountNode = master.derive(accountPath);
+
+  if (!accountNode?.publicExtendedKey) {
+    throw new Error('Unable to derive account xpub.');
+  }
+
+  return {
+    accountPath,
+    accountXpub: accountNode.publicExtendedKey,
+    accountXprv: accountNode.privateExtendedKey ?? null,
+    masterFingerprint: formatFingerprint(master.fingerprint ?? 0),
   };
 };
 

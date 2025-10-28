@@ -37,6 +37,38 @@ export const recoverStyles = StyleSheet.create({
   form: {
     gap: spacing.md,
   },
+  modeSection: {
+    gap: spacing.xs,
+  },
+  modeButtonsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.muted,
+    alignItems: 'center',
+    backgroundColor: colors.secondary,
+  },
+  modeButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  modeButtonText: {
+    color: colors.foreground,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  modeButtonTextActive: {
+    color: colors.primaryText,
+  },
+  modeDescription: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
   label: {
     color: colors.foreground,
     fontSize: typography.small,

@@ -12,12 +12,14 @@ import {
   View,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Clipboard from 'expo-clipboard';
 import WalletCard from '../components/WalletCard';
 import SeedPhrase from '../components/SeedPhrase';
 import {
   SATOSHIS_IN_BTC,
   DEFAULT_ADDRESS_TYPE,
   deriveAddressDetails,
+  deriveAccountKeysFromSeed,
   formatBitcoinAmount,
   generateSeedPhrase,
   getWalletAddressesBalance,
@@ -30,6 +32,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { homeStyles as styles } from '../styles/homeStyles';
 import { Feather } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
+import { WALLET_MODE_LABELS, WALLET_MODES } from '../constants/walletModes';
 
 const arraysShallowEqual = (left = [], right = []) => {
   if (left === right) {
@@ -90,6 +93,22 @@ const isWalletStateEqual = (prev, next) => {
   }
 
   if (prev.addressType !== next.addressType) {
+    return false;
+  }
+
+  if ((prev.mode ?? WALLET_MODES.FULL) !== (next.mode ?? WALLET_MODES.FULL)) {
+    return false;
+  }
+
+  if ((prev.accountXpub ?? null) !== (next.accountXpub ?? null)) {
+    return false;
+  }
+
+  if ((prev.masterFingerprint ?? null) !== (next.masterFingerprint ?? null)) {
+    return false;
+  }
+
+  if ((prev.accountPath ?? null) !== (next.accountPath ?? null)) {
     return false;
   }
 
@@ -178,137 +197,274 @@ const HomeScreen = ({ navigation }) => {
 
   const seedPhrase = walletData?.seedPhrase ?? [];
   const hasPendingIncoming = useMemo(() => pendingIncomingSat > 0, [pendingIncomingSat]);
-
-  const buildWalletState = useCallback((seedWords, baseData = {}) => {
-    const normalizedSeed = Array.isArray(seedWords) ? seedWords : [];
-    const type = baseData.addressType ?? DEFAULT_ADDRESS_TYPE;
-
-    const receivingRaw = Array.isArray(baseData.receivingAddresses) ? baseData.receivingAddresses : [];
-    const changeRaw = Array.isArray(baseData.changeAddresses) ? baseData.changeAddresses : [];
-
-    let receiving = receivingRaw
-      .filter((item) => item?.address)
-      .map((item, idx) => ({
-        address: item.address,
-        index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
-        type: item.type ?? type,
-        change: false,
-        used: Boolean(item.used),
-      }));
-
-    let change = changeRaw
-      .filter((item) => item?.address)
-      .map((item, idx) => ({
-        address: item.address,
-        index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
-        type: item.type ?? type,
-        change: true,
-        used: Boolean(item.used),
-      }));
-
-    let receivingIndex =
-      Number.isInteger(baseData.receivingIndex) && baseData.receivingIndex >= 0
-        ? baseData.receivingIndex
-        : receiving.length;
-
-    let changeIndex =
-      Number.isInteger(baseData.changeIndex) && baseData.changeIndex >= 0
-        ? baseData.changeIndex
-        : change.length;
-
-    if (!receiving.length && normalizedSeed.length) {
-      const first = deriveAddressDetails(normalizedSeed, {
-        type,
-        change: false,
-        index: 0,
-      });
-
-      receiving = [
-        {
-          address: first.address,
-          index: 0,
-          type,
-          change: false,
-          used: false,
-        },
-      ];
-      receivingIndex = 1;
+  const walletMode = walletData?.mode ?? WALLET_MODES.FULL;
+  const isFullMode = walletMode === WALLET_MODES.FULL;
+  const isOnlineProtectedMode = walletMode === WALLET_MODES.ONLINE_PROTECTED;
+  const isOfflineProtectedMode = walletMode === WALLET_MODES.OFFLINE_PROTECTED;
+  const hasSeedAvailable = seedPhrase.length > 0;
+  const accountXpub = walletData?.accountXpub ?? null;
+  const canUseNetwork = !isOfflineProtectedMode;
+  const canRefreshPrice = canUseNetwork && isOnline;
+  const canInitiateDirectSend = isFullMode;
+  const canShowSeed = hasSeedAvailable;
+  const modeInfoMessage = useMemo(() => {
+    if (isOnlineProtectedMode) {
+      return 'Modo online protegido: utilize este aparelho para sincronizar saldos e montar PSBTs.';
     }
-
-    receivingIndex = Math.max(receivingIndex, receiving.length);
-    changeIndex = Math.max(changeIndex, change.length);
-
-  return {
-    seedPhrase: normalizedSeed,
-    addressType: type,
-    receivingIndex,
-    changeIndex,
-    receivingAddresses: receiving,
-    changeAddresses: change,
-    discoveryComplete: Boolean(baseData.discoveryComplete),
-  };
-}, [deriveAddressDetails]);
-
-const discoverWalletUsage = useCallback(
-  async (seedWords, baseWallet, { gapLimit = 3, maxScan = 20 } = {}) => {
-    if (!Array.isArray(seedWords) || !seedWords.length) {
-      return {
-        wallet: {
-          ...baseWallet,
-          discoveryComplete: true,
-        },
-        summaryMap: {},
-        pendingReceivedSat: 0,
-      };
+    if (isOfflineProtectedMode) {
+      return 'Modo offline protegido: mantenha este dispositivo desconectado e use-o apenas para assinar transacoes.';
     }
+    return null;
+  }, [isOfflineProtectedMode, isOnlineProtectedMode]);
+  const modeBadgeStyle = useMemo(
+    () => [
+      styles.modeBadge,
+      isOfflineProtectedMode ? styles.modeBadgeDanger : null,
+      isOnlineProtectedMode ? styles.modeBadgeWarning : null,
+    ],
+    [isOfflineProtectedMode, isOnlineProtectedMode],
+  );
 
-    const type = baseWallet.addressType ?? DEFAULT_ADDRESS_TYPE;
+  const buildWalletState = useCallback(
+    (seedWords, baseData = {}) => {
+      const normalizedSeed = Array.isArray(seedWords) ? seedWords : [];
+      const type = baseData.addressType ?? DEFAULT_ADDRESS_TYPE;
+      const knownModes = Object.values(WALLET_MODES);
+      const fallbackMode = normalizedSeed.length ? WALLET_MODES.FULL : WALLET_MODES.ONLINE_PROTECTED;
+      const mode = knownModes.includes(baseData.mode) ? baseData.mode : fallbackMode;
 
-    const scanBranch = async (changeFlag) => {
-      const results = new Map();
-      const summaries = {};
+      let accountXpub = baseData.accountXpub ?? null;
+      let masterFingerprint = baseData.masterFingerprint ?? null;
+      let accountPath = baseData.accountPath ?? null;
 
-      const existing = (changeFlag ? baseWallet.changeAddresses : baseWallet.receivingAddresses) ?? [];
-      existing.forEach((item) => {
-        results.set(item.index, {
+      const canDeriveWithSeed = normalizedSeed.length > 0;
+
+      if (canDeriveWithSeed) {
+        try {
+          const accountKeys = deriveAccountKeysFromSeed(normalizedSeed, { type });
+          if (!accountXpub) {
+            accountXpub = accountKeys.accountXpub;
+          }
+          if (!masterFingerprint) {
+            masterFingerprint = accountKeys.masterFingerprint;
+          }
+          if (!accountPath) {
+            accountPath = accountKeys.accountPath;
+          }
+        } catch (error) {
+          console.error('Erro ao derivar dados publicos da seed', error);
+        }
+      }
+
+      const canDeriveWithPublic = Boolean(accountXpub);
+
+      if (!canDeriveWithSeed && !canDeriveWithPublic) {
+        throw new Error('Nenhuma fonte de derivacao disponivel para gerar enderecos.');
+      }
+
+      const receivingRaw = Array.isArray(baseData.receivingAddresses) ? baseData.receivingAddresses : [];
+      const changeRaw = Array.isArray(baseData.changeAddresses) ? baseData.changeAddresses : [];
+
+      let receiving = receivingRaw
+        .filter((item) => item?.address)
+        .map((item, idx) => ({
           address: item.address,
-          index: item.index,
+          index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
           type: item.type ?? type,
-          change: changeFlag,
+          change: false,
           used: Boolean(item.used),
+        }));
+
+      let change = changeRaw
+        .filter((item) => item?.address)
+        .map((item, idx) => ({
+          address: item.address,
+          index: Number.isInteger(item.index) && item.index >= 0 ? item.index : idx,
+          type: item.type ?? type,
+          change: true,
+          used: Boolean(item.used),
+        }));
+
+      const deriveAddress = ({ changeFlag, index }) =>
+        deriveAddressDetails(canDeriveWithSeed ? normalizedSeed : null, {
+          type,
+          change: changeFlag,
+          index,
+          accountXpub: !canDeriveWithSeed ? accountXpub : undefined,
         });
-      });
 
-      let index = 0;
-      let emptyStreak = 0;
-      let lastActiveIndex = -1;
-
-      while (index < maxScan && emptyStreak < gapLimit) {
-        let entry = results.get(index);
-
-        if (!entry) {
-          const derived = deriveAddressDetails(seedWords, {
+      if (!receiving.length && (canDeriveWithSeed || canDeriveWithPublic)) {
+        const first = deriveAddress({ changeFlag: false, index: 0 });
+        receiving = [
+          {
+            address: first.address,
+            index: 0,
             type,
-            change: changeFlag,
-            index,
-          });
-          entry = {
-            address: derived.address,
-            index,
-            type,
-            change: changeFlag,
+            change: false,
             used: false,
-          };
-          results.set(index, entry);
+          },
+        ];
+      }
+
+      let receivingIndex =
+        Number.isInteger(baseData.receivingIndex) && baseData.receivingIndex >= 0
+          ? baseData.receivingIndex
+          : receiving.length;
+
+      let changeIndex =
+        Number.isInteger(baseData.changeIndex) && baseData.changeIndex >= 0 ? baseData.changeIndex : change.length;
+
+      receivingIndex = Math.max(receivingIndex, receiving.length);
+      changeIndex = Math.max(changeIndex, change.length);
+
+      return {
+        mode,
+        seedPhrase: normalizedSeed,
+        accountXpub: accountXpub ?? undefined,
+        masterFingerprint: masterFingerprint ?? undefined,
+        accountPath: accountPath ?? undefined,
+        addressType: type,
+        receivingIndex,
+        changeIndex,
+        receivingAddresses: receiving,
+        changeAddresses: change,
+        discoveryComplete: Boolean(baseData.discoveryComplete),
+      };
+    },
+    [deriveAccountKeysFromSeed, deriveAddressDetails],
+  );
+
+  const discoverWalletUsage = useCallback(
+    async (seedWords, baseWallet, { gapLimit = 3, maxScan = 20 } = {}) => {
+      const type = baseWallet.addressType ?? DEFAULT_ADDRESS_TYPE;
+      const mode = baseWallet.mode ?? WALLET_MODES.FULL;
+      const accountXpub = baseWallet.accountXpub;
+      const hasSeed = Array.isArray(seedWords) && seedWords.length > 0;
+      const canDeriveWithSeed = hasSeed;
+      const canDeriveWithPublic = Boolean(accountXpub);
+
+      if (mode === WALLET_MODES.OFFLINE_PROTECTED) {
+        return {
+          wallet: {
+            ...baseWallet,
+            discoveryComplete: true,
+          },
+          summaryMap: {},
+          pendingReceivedSat: 0,
+        };
+      }
+
+      if (!canDeriveWithSeed && !canDeriveWithPublic) {
+        return {
+          wallet: {
+            ...baseWallet,
+            discoveryComplete: true,
+          },
+          summaryMap: {},
+          pendingReceivedSat: 0,
+        };
+      }
+
+      const deriveAddress = (changeFlag, index) =>
+        deriveAddressDetails(canDeriveWithSeed ? seedWords : null, {
+          type,
+          change: changeFlag,
+          index,
+          accountXpub: !canDeriveWithSeed ? accountXpub : undefined,
+        });
+
+      const scanBranch = async (changeFlag) => {
+        const results = new Map();
+        const summaries = {};
+
+        const existing = (changeFlag ? baseWallet.changeAddresses : baseWallet.receivingAddresses) ?? [];
+        existing.forEach((item) => {
+          results.set(item.index, {
+            address: item.address,
+            index: item.index,
+            type: item.type ?? type,
+            change: changeFlag,
+            used: Boolean(item.used),
+          });
+        });
+
+        let index = 0;
+        let emptyStreak = 0;
+        let lastActiveIndex = -1;
+
+        while (index < maxScan && emptyStreak < gapLimit) {
+          let entry = results.get(index);
+
+          if (!entry) {
+            const derived = deriveAddress(changeFlag, index);
+            entry = {
+              address: derived.address,
+              index,
+              type,
+              change: changeFlag,
+              used: false,
+            };
+            results.set(index, entry);
+          }
+
+          if (!summaries[entry.address]) {
+            try {
+              summaries[entry.address] = await fetchAddressSummary(entry.address);
+            } catch (error) {
+              console.error(`Erro descobrindo endereco ${entry.address}`, error);
+              summaries[entry.address] = {
+                address: entry.address,
+                balance: 0,
+                balanceSat: 0,
+                pendingReceivedSat: 0,
+                totalReceivedSat: 0,
+                hasActivity: false,
+              };
+            }
+          }
+
+          const summary = summaries[entry.address];
+          const hasActivity =
+            Number(summary.balanceSat ?? 0) > 0 ||
+            Number(summary.pendingReceivedSat ?? 0) > 0 ||
+            Number(summary.totalReceivedSat ?? 0) > 0 ||
+            summary.hasActivity;
+
+          if (hasActivity && !entry.used) {
+            entry.used = true;
+          }
+
+          if (hasActivity) {
+            lastActiveIndex = index;
+            emptyStreak = 0;
+          } else {
+            emptyStreak += 1;
+          }
+
+          index += 1;
         }
 
-        if (!summaries[entry.address]) {
-          try {
-            summaries[entry.address] = await fetchAddressSummary(entry.address);
-          } catch (error) {
-            console.error(`Erro descobrindo endereco ${entry.address}`, error);
-            summaries[entry.address] = {
-              address: entry.address,
+        const deduped = [...results.values()].sort((a, b) => a.index - b.index);
+
+        if (!changeFlag) {
+          const nextIndex =
+            lastActiveIndex >= 0
+              ? lastActiveIndex + 1
+              : deduped.length
+              ? deduped[deduped.length - 1].index + 1
+              : 0;
+          const exists = deduped.some((item) => item.index === nextIndex);
+          if (!exists) {
+            const derived = deriveAddress(false, nextIndex);
+            deduped.push({
+              address: derived.address,
+              index: nextIndex,
+              type,
+              change: false,
+              used: false,
+            });
+            summaries[derived.address] = {
+              address: derived.address,
               balance: 0,
               balanceSat: 0,
               pendingReceivedSat: 0,
@@ -318,100 +474,45 @@ const discoverWalletUsage = useCallback(
           }
         }
 
-        const summary = summaries[entry.address];
-        const hasActivity =
-          Number(summary.balanceSat ?? 0) > 0 ||
-          Number(summary.pendingReceivedSat ?? 0) > 0 ||
-          Number(summary.totalReceivedSat ?? 0) > 0 ||
-          summary.hasActivity;
+        return { addresses: deduped, summaries };
+      };
 
-        if (hasActivity && !entry.used) {
-          entry.used = true;
-        }
+      const receivingScan = await scanBranch(false);
+      const changeScan = await scanBranch(true);
 
-        if (hasActivity) {
-          lastActiveIndex = index;
-          emptyStreak = 0;
-        } else {
-          emptyStreak += 1;
-        }
+      const summaryMap = { ...receivingScan.summaries, ...changeScan.summaries };
 
-        index += 1;
-      }
+      const receivingAddresses = receivingScan.addresses;
+      const changeAddresses = changeScan.addresses;
 
-      const deduped = [...results.values()].sort((a, b) => a.index - b.index);
+      const receivingIndex = receivingAddresses.length
+        ? Math.max(...receivingAddresses.map((item) => item.index)) + 1
+        : baseWallet.receivingIndex ?? 0;
 
-      if (!changeFlag) {
-        const nextIndex =
-          lastActiveIndex >= 0
-            ? lastActiveIndex + 1
-            : deduped.length
-            ? deduped[deduped.length - 1].index + 1
-            : 0;
-        const exists = deduped.some((item) => item.index === nextIndex);
-        if (!exists) {
-          const derived = deriveAddressDetails(seedWords, {
-            type,
-            change: false,
-            index: nextIndex,
-          });
-          deduped.push({
-            address: derived.address,
-            index: nextIndex,
-            type,
-            change: false,
-            used: false,
-          });
-          summaries[derived.address] = {
-            address: derived.address,
-            balance: 0,
-            balanceSat: 0,
-            pendingReceivedSat: 0,
-            totalReceivedSat: 0,
-            hasActivity: false,
-          };
-        }
-      }
+      const changeIndex = changeAddresses.length
+        ? Math.max(...changeAddresses.map((item) => item.index)) + 1
+        : baseWallet.changeIndex ?? 0;
 
-      return { addresses: deduped, summaries };
-    };
+      const pendingReceivedSat = [...receivingAddresses, ...changeAddresses].reduce(
+        (total, entry) => total + Number(summaryMap[entry.address]?.pendingReceivedSat ?? 0),
+        0,
+      );
 
-    const receivingScan = await scanBranch(false);
-    const changeScan = await scanBranch(true);
-
-    const summaryMap = { ...receivingScan.summaries, ...changeScan.summaries };
-
-    const receivingAddresses = receivingScan.addresses;
-    const changeAddresses = changeScan.addresses;
-
-    const receivingIndex = receivingAddresses.length
-      ? Math.max(...receivingAddresses.map((item) => item.index)) + 1
-      : baseWallet.receivingIndex ?? 0;
-
-    const changeIndex = changeAddresses.length
-      ? Math.max(...changeAddresses.map((item) => item.index)) + 1
-      : baseWallet.changeIndex ?? 0;
-
-    const pendingReceivedSat = receivingAddresses.reduce(
-      (total, entry) => total + Number(summaryMap[entry.address]?.pendingReceivedSat ?? 0),
-      0,
-    );
-
-    return {
-      wallet: {
-        ...baseWallet,
-        receivingAddresses,
-        changeAddresses,
-        receivingIndex,
-        changeIndex,
-        discoveryComplete: true,
-      },
-      summaryMap,
-      pendingReceivedSat,
-    };
-  },
-  [deriveAddressDetails, fetchAddressSummary],
-);
+      return {
+        wallet: {
+          ...baseWallet,
+          receivingAddresses,
+          changeAddresses,
+          receivingIndex,
+          changeIndex,
+          discoveryComplete: true,
+        },
+        summaryMap,
+        pendingReceivedSat,
+      };
+    },
+    [deriveAddressDetails, fetchAddressSummary],
+  );
   const resolveDisplayAddress = useCallback((data) => {
     if (!data?.receivingAddresses?.length) {
       return '';
@@ -461,8 +562,20 @@ const discoverWalletUsage = useCallback(
     walletDataRef.current = walletData;
   }, [walletData]);
 
+  useEffect(() => {
+    if (!canUseNetwork && isOnline) {
+      setIsOnline(false);
+    }
+  }, [canUseNetwork, isOnline]);
+
   const loadTransactionHistory = useCallback(async () => {
     if (!walletDataRef.current) {
+      setTransactions([]);
+      return;
+    }
+
+    if (!canUseNetwork) {
+      setTransactionsError('Disponivel apenas no dispositivo online.');
       setTransactions([]);
       return;
     }
@@ -488,7 +601,7 @@ const discoverWalletUsage = useCallback(
     } finally {
       setTransactionsLoading(false);
     }
-  }, [isOnline]);
+  }, [canUseNetwork, isOnline]);
 
   const handleOpenHistory = useCallback(() => {
     setHistoryModalVisible(true);
@@ -762,10 +875,27 @@ const discoverWalletUsage = useCallback(
   }, [generatingWallet, loadingWallet, loggingOut, sendingTransaction]);
 
   const handleToggleConnection = useCallback(() => {
+    if (isOfflineProtectedMode) {
+      Alert.alert(
+        'Modo offline protegido',
+        'Este dispositivo deve permanecer desconectado. Use o aparelho online para sincronizar.',
+      );
+      return;
+    }
     setIsOnline((prev) => !prev);
-  }, []);
+  }, [isOfflineProtectedMode]);
 
   const handleSendBitcoin = useCallback(() => {
+    if (!canInitiateDirectSend) {
+      showFeedback(
+        'info',
+        isOnlineProtectedMode
+          ? 'Use o fluxo de PSBT para enviar BTC a partir deste dispositivo online.'
+          : 'Este dispositivo atua apenas como assinador offline. Use o fluxo de PSBT para assinar transacoes.',
+      );
+      return;
+    }
+
     if (!isOnline) {
       showFeedback('error', 'Ative o modo online para enviar BTC.');
       return;
@@ -791,7 +921,7 @@ const discoverWalletUsage = useCallback(
     setSendPercentage(null);
     setFeeProfile('fastest');
     setSendStatus(null);
-  }, [address, hasPendingIncoming, isOnline, pendingIncomingBtc, showFeedback]);
+  }, [address, canInitiateDirectSend, hasPendingIncoming, isOnline, isOnlineProtectedMode, pendingIncomingBtc, showFeedback]);
 
   const handleReceiveBitcoin = useCallback(() => {
     if (!address) {
@@ -801,6 +931,22 @@ const discoverWalletUsage = useCallback(
 
     setReceiveModalVisible(true);
   }, [address, showFeedback]);
+
+  const handleCopyXpub = useCallback(() => {
+    if (!accountXpub) {
+      showFeedback('error', 'xpub indisponivel neste dispositivo.');
+      return;
+    }
+
+    Clipboard.setStringAsync(accountXpub)
+      .then(() => {
+        showFeedback('success', 'xpub copiado para a area de transferencia.');
+      })
+      .catch((error) => {
+        console.error('Erro ao copiar xpub', error);
+        showFeedback('error', 'Nao foi possivel copiar o xpub.');
+      });
+  }, [accountXpub, showFeedback]);
 
   const handleCloseSendModal = useCallback(() => {
     setIsScanning(false);
@@ -1321,7 +1467,16 @@ const discoverWalletUsage = useCallback(
 
   const fetchWalletBalance = useCallback(
     async (targetWallet = walletDataRef.current) => {
-      if (!isOnline || !targetWallet) {
+      if (!targetWallet) {
+        return;
+      }
+
+      const walletMode = targetWallet.mode ?? WALLET_MODES.FULL;
+      if (walletMode === WALLET_MODES.OFFLINE_PROTECTED) {
+        return;
+      }
+
+      if (!isOnline) {
         return;
       }
 
@@ -1353,6 +1508,9 @@ const discoverWalletUsage = useCallback(
         const walletSeed = Array.isArray(targetWallet.seedPhrase)
           ? targetWallet.seedPhrase
           : walletDataRef.current?.seedPhrase ?? [];
+        const accountXpub = targetWallet.accountXpub ?? walletDataRef.current?.accountXpub ?? null;
+        const canDeriveWithSeed = Array.isArray(walletSeed) && walletSeed.length > 0;
+        const canDeriveWithXpub = Boolean(accountXpub);
 
         const nextReceiving = workingWallet.receivingAddresses.map((item) => {
           if (item.used) {
@@ -1399,7 +1557,7 @@ const discoverWalletUsage = useCallback(
         });
 
         const ensureFreshReceivingAddress = () => {
-          if (!walletSeed.length) {
+          if (!canDeriveWithSeed && !canDeriveWithXpub) {
             return null;
           }
 
@@ -1413,10 +1571,11 @@ const discoverWalletUsage = useCallback(
               ? workingWallet.receivingIndex
               : (workingWallet.receivingAddresses ?? []).length;
 
-          const nextDetails = deriveAddressDetails(walletSeed, {
+          const nextDetails = deriveAddressDetails(canDeriveWithSeed ? walletSeed : null, {
             type: workingWallet.addressType ?? DEFAULT_ADDRESS_TYPE,
             change: false,
             index: nextIndex,
+            accountXpub: !canDeriveWithSeed ? accountXpub : undefined,
           });
 
           const newReceivingEntry = {
@@ -1554,6 +1713,11 @@ const discoverWalletUsage = useCallback(
   );
 
   const refreshBtcPrice = useCallback(async () => {
+    if (!canUseNetwork) {
+      showFeedback('info', 'Atualize o preco utilizando o dispositivo online da carteira.');
+      return;
+    }
+
     if (!isOnline) {
       showFeedback('error', 'Ative o modo online para atualizar o preco do Bitcoin.');
       return;
@@ -1569,7 +1733,7 @@ const discoverWalletUsage = useCallback(
     } finally {
       setPriceRefreshing(false);
     }
-  }, [isOnline, showFeedback]);
+  }, [canUseNetwork, isOnline, showFeedback]);
 
   const regenerateWallet = useCallback(
     async (skipFeedback = false) => {
@@ -1582,6 +1746,7 @@ const discoverWalletUsage = useCallback(
           receivingAddresses: [],
           changeAddresses: [],
           discoveryComplete: true,
+          mode: walletMode,
         });
 
         await persistWalletData(initialState);
@@ -1597,7 +1762,7 @@ const discoverWalletUsage = useCallback(
         setGeneratingWallet(false);
       }
     },
-    [buildWalletState, fetchWalletBalance, persistWalletData, showFeedback],
+    [buildWalletState, fetchWalletBalance, persistWalletData, showFeedback, walletMode],
   );
 
   const confirmRegenerateWallet = useCallback(() => {
@@ -1615,7 +1780,7 @@ const discoverWalletUsage = useCallback(
     if (balance > 0) {
       Alert.alert(
         'Saldo detectado',
-        'Existe saldo disponível nesta carteira. Transfira seus BTC para outra carteira antes de criar uma nova para evitar a perda dos fundos.',
+        'Existe saldo disponivel nesta carteira. Transfira seus BTC para outra carteira antes de criar uma nova para evitar a perda dos fundos.',
         [
           { text: 'Entendi', style: 'cancel' },
           {
@@ -1716,7 +1881,7 @@ const discoverWalletUsage = useCallback(
   }, [loadWalletFromStorage, navigation]);
 
   useEffect(() => {
-    if (!isOnline || !walletDataRef.current) {
+    if (!canUseNetwork || !isOnline || !walletDataRef.current) {
       return;
     }
 
@@ -1727,7 +1892,7 @@ const discoverWalletUsage = useCallback(
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [fetchWalletBalance, isOnline]);
+  }, [canUseNetwork, fetchWalletBalance, isOnline]);
 
   useEffect(() => {
     if (!didToggleRef.current) {
@@ -1769,6 +1934,9 @@ const discoverWalletUsage = useCallback(
           <View>
             <Text style={styles.heading}>Black Vault wallet</Text>
             <Text style={styles.headingSubtitle}>Controle total da sua chave privada</Text>
+            <View style={modeBadgeStyle}>
+              <Text style={styles.modeBadgeText}>{WALLET_MODE_LABELS[walletMode]}</Text>
+            </View>
           </View>
           <View style={styles.headerActions}>
             <TouchableOpacity
@@ -1781,9 +1949,11 @@ const discoverWalletUsage = useCallback(
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={handleToggleConnection}
+              disabled={!canUseNetwork}
               style={[
                 styles.headerButton,
                 styles.outlineButton,
+                !canUseNetwork ? styles.headerButtonDisabled : null,
                 { width: 44, height: 44, paddingHorizontal: 0, justifyContent: 'center', alignItems: 'center' },
               ]}
               accessibilityLabel={isOnline ? 'Alternar para modo offline' : 'Alternar para modo online'}
@@ -1800,36 +1970,66 @@ const discoverWalletUsage = useCallback(
           </View>
         </View>
 
+        {modeInfoMessage ? <Text style={styles.modeInfoText}>{modeInfoMessage}</Text> : null}
+
         <WalletCard
           address={address}
           balance={balance}
           usdValue={usdValue}
           btcPrice={btcPrice}
-          isRefreshing={priceRefreshing}
+          isRefreshing={priceRefreshing && canRefreshPrice}
+          canRefreshPrice={canRefreshPrice}
           onRefreshPrice={refreshBtcPrice}
         />
 
-          <View style={styles.quickActions}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.quickActionButton,
+        {isOfflineProtectedMode ? (
+          <View style={styles.xpubSection}>
+            <Text style={styles.xpubLabel}>xpub da conta</Text>
+            <View style={styles.xpubRow}>
+              <Text style={styles.xpubValue} numberOfLines={1} ellipsizeMode="middle">
+                {accountXpub ?? 'Indisponivel'}
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={handleCopyXpub}
+                disabled={!accountXpub}
+                style={[styles.xpubCopyButton, !accountXpub ? styles.xpubCopyButtonDisabled : null]}
+              >
+                <Text
+                  style={[
+                    styles.xpubCopyButtonText,
+                    !accountXpub ? styles.xpubCopyButtonTextDisabled : null,
+                  ]}
+                >
+                  Copiar
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.xpubHint}>Use este xpub ao configurar o aplicativo online protegido.</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.quickActions}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={[
+              styles.quickActionButton,
               styles.sendButton,
-              hasPendingIncoming ? styles.quickActionButtonDisabled : null,
+              hasPendingIncoming || !canInitiateDirectSend ? styles.quickActionButtonDisabled : null,
             ]}
             onPress={handleSendBitcoin}
-            disabled={hasPendingIncoming}
+            disabled={hasPendingIncoming || !canInitiateDirectSend}
           >
             <Feather
               name="arrow-up-right"
               size={18}
-              color={hasPendingIncoming ? colors.mutedForeground : colors.primaryText}
+              color={hasPendingIncoming || !canInitiateDirectSend ? colors.mutedForeground : colors.primaryText}
               style={styles.quickActionIcon}
             />
             <Text
               style={[
                 styles.quickActionText,
-                hasPendingIncoming ? styles.quickActionTextDisabled : null,
+                hasPendingIncoming || !canInitiateDirectSend ? styles.quickActionTextDisabled : null,
               ]}
             >
               Enviar BTC
@@ -1847,25 +2047,26 @@ const discoverWalletUsage = useCallback(
 
         {hasPendingIncoming ? (
           <Text style={styles.pendingNotice}>
-            Transação recebida pendente (~{formatBitcoinAmount(pendingIncomingBtc)} BTC) aguardando confirmação.
+            Transacao recebida pendente (~{formatBitcoinAmount(pendingIncomingBtc)} BTC) aguardando confirmacao.
           </Text>
         ) : null}
 
         <TouchableOpacity
           activeOpacity={0.85}
-          style={styles.historyButton}
-          onPress={handleOpenHistory}
-          >
-            <Feather name="clock" size={20} color={colors.primaryText} style={styles.historyButtonIcon} />
-            <View style={styles.historyButtonTextContainer}>
-              <Text style={styles.historyButtonTitle}>Histórico de transações</Text>
-              <Text style={styles.historyButtonSubtitle}>Acompanhe entradas e saídas confirmadas</Text>
-            </View>
-          </TouchableOpacity>
+          style={[styles.historyButton, !canUseNetwork || !isOnline ? styles.historyButtonDisabled : null]}
+          onPress={canUseNetwork && isOnline ? handleOpenHistory : undefined}
+          disabled={!canUseNetwork || !isOnline}
+        >
+          <Feather name="clock" size={20} color={colors.primaryText} style={styles.historyButtonIcon} />
+          <View style={styles.historyButtonTextContainer}>
+            <Text style={styles.historyButtonTitle}>Historico de transacoes</Text>
+            <Text style={styles.historyButtonSubtitle}>Acompanhe entradas e saidas confirmadas</Text>
+          </View>
+        </TouchableOpacity>
 
           {addressBalances.length ? (
             <View style={styles.addressBalancesSection}>
-              <Text style={styles.addressBalancesTitle}>Endereços monitorados</Text>
+              <Text style={styles.addressBalancesTitle}>Enderecos monitorados</Text>
               {addressBalances.map((item) => (
                 <View key={item.address} style={styles.addressBalanceItem}>
                   <View style={styles.addressBalanceHeader}>
@@ -1893,10 +2094,14 @@ const discoverWalletUsage = useCallback(
             </View>
           ) : null}
 
-          <SeedPhrase words={seedPhrase} />
+                    {canShowSeed ? (
+            <SeedPhrase words={seedPhrase} />
+          ) : (
+            <Text style={styles.modeInfoText}>Seed nao armazenada neste dispositivo.</Text>
+          )}
 
         <Text style={styles.disclaimer}>
-          ATENCAO: Mantenha sua frase semente em segurança. Nunca compartilhe com terceiros.
+          ATENCAO: mantenha sua frase semente em seguranca. Nunca compartilhe com terceiros.
         </Text>
 
         {priceRefreshing ? <Text style={styles.loadingText}>Atualizando preco...</Text> : null}

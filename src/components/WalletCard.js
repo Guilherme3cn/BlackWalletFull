@@ -21,7 +21,15 @@ const formatBrl = (value) =>
     maximumFractionDigits: 2,
   }).format(value || 0);
 
-const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice, isRefreshing = false }) => {
+const WalletCard = ({
+  address,
+  balance,
+  usdValue,
+  onRefreshPrice,
+  btcPrice,
+  isRefreshing = false,
+  canRefreshPrice = true,
+}) => {
   const [balanceDisplayMode, setBalanceDisplayMode] = useState('btc'); // btc -> sats -> brl
   const rotateValue = useRef(new Animated.Value(0)).current;
   const animationRef = useRef(null);
@@ -119,7 +127,7 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice, isRe
   );
 
   const handleRefreshPress = useCallback(() => {
-    if (typeof onRefreshPrice !== 'function') {
+    if (!canRefreshPrice || typeof onRefreshPrice !== 'function') {
       return;
     }
 
@@ -142,7 +150,7 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice, isRe
           stopWithMinimumDuration();
         }
       });
-  }, [onRefreshPrice, startAnimation, stopWithMinimumDuration]);
+  }, [canRefreshPrice, onRefreshPrice, startAnimation, stopWithMinimumDuration]);
 
   const handleCopyAddress = async () => {
     if (!address) {
@@ -225,7 +233,12 @@ const WalletCard = ({ address, balance, usdValue, onRefreshPrice, btcPrice, isRe
           <Text style={styles.subtitle}>Monitoramento seguro do seu saldo</Text>
         </View>
         <View style={styles.headerButtons}>
-          <TouchableOpacity onPress={handleRefreshPress} activeOpacity={0.8} style={styles.iconButton}>
+          <TouchableOpacity
+            onPress={handleRefreshPress}
+            activeOpacity={0.8}
+            style={[styles.iconButton, !canRefreshPrice ? styles.iconButtonDisabled : null]}
+            disabled={!canRefreshPrice}
+          >
             <Animated.View style={{ transform: [{ rotate: refreshSpin }] }}>
               <Ionicons name="refresh" size={20} color={styles.iconText.color} />
             </Animated.View>

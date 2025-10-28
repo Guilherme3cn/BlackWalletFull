@@ -44,6 +44,35 @@ export const homeStyles = StyleSheet.create({
     marginTop: spacing.xs,
     fontSize: typography.small,
   },
+  modeBadge: {
+    marginTop: spacing.xs,
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.secondary,
+  },
+  modeBadgeText: {
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: typography.tiny,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  modeBadgeWarning: {
+    borderColor: '#f59e0b',
+    backgroundColor: '#f59e0b22',
+  },
+  modeBadgeDanger: {
+    borderColor: colors.danger,
+    backgroundColor: '#ef444422',
+  },
+  modeInfoText: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
   headerActions: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -53,6 +82,62 @@ export const homeStyles = StyleSheet.create({
   quickActions: {
     flexDirection: 'row',
     gap: spacing.md,
+  },
+  xpubSection: {
+    width: '100%',
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.secondary,
+    gap: spacing.xs,
+  },
+  xpubLabel: {
+    color: colors.primary,
+    fontSize: typography.small,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  xpubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  xpubValue: {
+    flex: 1,
+    color: colors.foreground,
+    fontSize: typography.small,
+    fontFamily: 'monospace',
+    backgroundColor: colors.muted,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  xpubCopyButton: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  xpubCopyButtonDisabled: {
+    opacity: 0.6,
+  },
+  xpubCopyButtonText: {
+    color: colors.primaryText,
+    fontWeight: '600',
+    fontSize: typography.small,
+  },
+  xpubCopyButtonTextDisabled: {
+    color: colors.primaryText,
+    opacity: 0.7,
+  },
+  xpubHint: {
+    color: colors.mutedForeground,
+    fontSize: typography.tiny,
   },
   addressBalancesSection: {
     width: '100%',
@@ -128,6 +213,9 @@ export const homeStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: '#504f4f85',
+  },
+  historyButtonDisabled: {
+    opacity: 0.5,
   },
   historyButtonIcon: {
     marginRight: 0,
@@ -476,6 +564,9 @@ export const homeStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.primary,
     backgroundColor: 'transparent',
+  },
+  headerButtonDisabled: {
+    opacity: 0.5,
   },
   headerButtonText: {
     color: colors.primary,
