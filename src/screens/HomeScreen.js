@@ -24,6 +24,10 @@ import {
   generateSeedPhrase,
   getWalletAddressesBalance,
   getWalletTransactionHistory,
+  createPsbtTransaction,
+  parsePsbtDetails,
+  signPsbtWithSeedPhrase,
+  broadcastSignedPsbt,
   sendBitcoinTransaction,
   MIN_CHANGE_VALUE,
   fetchAddressSummary,
@@ -179,6 +183,21 @@ const HomeScreen = ({ navigation }) => {
   const [feeError, setFeeError] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [sendingTransaction, setSendingTransaction] = useState(false);
+  const [psbtModalVisible, setPsbtModalVisible] = useState(false);
+  const [psbtAddress, setPsbtAddress] = useState('');
+  const [psbtAmount, setPsbtAmount] = useState('');
+  const [psbtStatus, setPsbtStatus] = useState(null);
+  const [psbtDraft, setPsbtDraft] = useState(null);
+  const [creatingPsbt, setCreatingPsbt] = useState(false);
+  const [signedPsbtInput, setSignedPsbtInput] = useState('');
+  const [broadcastStatus, setBroadcastStatus] = useState(null);
+  const [broadcastingPsbt, setBroadcastingPsbt] = useState(false);
+  const [signModalVisible, setSignModalVisible] = useState(false);
+  const [psbtToSign, setPsbtToSign] = useState('');
+  const [signedPsbt, setSignedPsbt] = useState(null);
+  const [signStatus, setSignStatus] = useState(null);
+  const [signingPsbt, setSigningPsbt] = useState(false);
+  const [scanMode, setScanMode] = useState(null);
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
   const [cameraModule, setCameraModule] = useState(null);
   const [cameraModuleError, setCameraModuleError] = useState(null);
@@ -207,6 +226,22 @@ const HomeScreen = ({ navigation }) => {
   const canRefreshPrice = canUseNetwork && isOnline;
   const canInitiateDirectSend = isFullMode;
   const canShowSeed = hasSeedAvailable;
+  const isFeeModalActive = sendModalVisible || psbtModalVisible;
+  const primaryActionLabel = isFullMode
+    ? 'Enviar BTC'
+    : isOnlineProtectedMode
+    ? 'Enviar PSBT'
+    : 'Assinar BTC';
+  const isPrimaryActionDisabled = isFullMode
+    ? hasPendingIncoming || !canInitiateDirectSend
+    : isOnlineProtectedMode
+    ? !isOnline || !walletData?.accountXpub || hasPendingIncoming
+    : !hasSeedAvailable;
+  const handlePrimaryAction = isFullMode
+    ? handleSendBitcoin
+    : isOnlineProtectedMode
+    ? handleOpenPsbtModal
+    : handleOpenSignModal;
   const modeInfoMessage = useMemo(() => {
     if (isOnlineProtectedMode) {
       return 'Modo online protegido: utilize este aparelho para sincronizar saldos e montar PSBTs.';
@@ -654,11 +689,28 @@ const HomeScreen = ({ navigation }) => {
   }, [historyModalVisible, loadTransactionHistory]);
 
   useEffect(() => {
-    if (hasPendingIncoming && sendModalVisible) {
+    if (!hasPendingIncoming) {
+      return;
+    }
+
+    if (sendModalVisible) {
       handleCloseSendModal();
       showFeedback('info', 'Aguarde a confirmacao das transacoes pendentes antes de enviar BTC.');
+      return;
     }
-  }, [hasPendingIncoming, sendModalVisible, handleCloseSendModal, showFeedback]);
+
+    if (psbtModalVisible) {
+      handleClosePsbtModal();
+      showFeedback('info', 'Aguarde a confirmacao das transacoes pendentes antes de montar uma PSBT.');
+    }
+  }, [
+    handleClosePsbtModal,
+    handleCloseSendModal,
+    hasPendingIncoming,
+    psbtModalVisible,
+    sendModalVisible,
+    showFeedback,
+  ]);
 
   const percentageOptions = useMemo(
     () => [
@@ -795,6 +847,171 @@ const HomeScreen = ({ navigation }) => {
     }
     return estimatedTotalBtc * btcPriceUsd;
   }, [btcPriceUsd, estimatedTotalBtc]);
+
+  const parsedPsbtAmount = useMemo(() => {
+    if (!psbtAmount) {
+      return 0;
+    }
+    const normalized = String(psbtAmount).replace(',', '.');
+    const value = Number.parseFloat(normalized);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, [psbtAmount]);
+
+  const psbtEstimatedTotalBtc = useMemo(() => {
+    return parsedPsbtAmount + estimatedFeeBtc;
+  }, [estimatedFeeBtc, parsedPsbtAmount]);
+
+  const psbtEstimatedTotalUsd = useMemo(() => {
+    if (!btcPriceUsd) {
+      return null;
+    }
+    return psbtEstimatedTotalBtc * btcPriceUsd;
+  }, [btcPriceUsd, psbtEstimatedTotalBtc]);
+
+  const psbtDraftSummary = useMemo(() => {
+    if (!psbtDraft?.psbtBase64) {
+      return null;
+    }
+    try {
+      return parsePsbtDetails(psbtDraft.psbtBase64);
+    } catch (error) {
+      console.error('Erro ao analisar detalhes da PSBT', error);
+      return null;
+    }
+  }, [psbtDraft]);
+
+  const psbtFeeBtc = useMemo(() => {
+    if (!psbtDraftSummary) {
+      return 0;
+    }
+    return psbtDraftSummary.fee / SATOSHIS_IN_BTC;
+  }, [psbtDraftSummary]);
+
+  const psbtFeeRatePerVbyte = useMemo(() => {
+    if (!psbtDraftSummary || !psbtDraftSummary.virtualSize) {
+      return null;
+    }
+    return psbtDraftSummary.fee / psbtDraftSummary.virtualSize;
+  }, [psbtDraftSummary]);
+
+  const psbtChangeBtc = useMemo(() => {
+    if (!psbtDraft?.change) {
+      return 0;
+    }
+    return psbtDraft.change / SATOSHIS_IN_BTC;
+  }, [psbtDraft]);
+
+  const psbtToSignSummary = useMemo(() => {
+    if (!psbtToSign?.trim()) {
+      return null;
+    }
+    try {
+      return parsePsbtDetails(psbtToSign.trim());
+    } catch (error) {
+      return null;
+    }
+  }, [psbtToSign]);
+
+  const psbtToSignBreakdown = useMemo(() => {
+    if (!psbtToSignSummary) {
+      return null;
+    }
+    const changeSat = psbtToSignSummary.outputs
+      .filter((output) => output.isChange)
+      .reduce((sum, item) => sum + (item.value ?? 0), 0);
+    const recipientSat = psbtToSignSummary.totalOutput - changeSat;
+    return {
+      feeBtc: psbtToSignSummary.fee / SATOSHIS_IN_BTC,
+      changeBtc: changeSat / SATOSHIS_IN_BTC,
+      recipientBtc: recipientSat / SATOSHIS_IN_BTC,
+      feeRate: psbtToSignSummary.feeRate,
+      virtualSize: psbtToSignSummary.virtualSize,
+    };
+  }, [psbtToSignSummary]);
+
+  const signedPsbtSummary = useMemo(() => {
+    if (!signedPsbt?.psbtBase64) {
+      return null;
+    }
+    try {
+      return parsePsbtDetails(signedPsbt.psbtBase64);
+    } catch (error) {
+      console.error('Erro ao analisar detalhes da PSBT assinada', error);
+      return null;
+    }
+  }, [signedPsbt]);
+
+  const signedPsbtBreakdown = useMemo(() => {
+    if (!signedPsbtSummary) {
+      return null;
+    }
+    const changeSat = signedPsbtSummary.outputs
+      .filter((output) => output.isChange)
+      .reduce((sum, item) => sum + (item.value ?? 0), 0);
+    const recipientSat = signedPsbtSummary.totalOutput - changeSat;
+    return {
+      feeBtc: signedPsbtSummary.fee / SATOSHIS_IN_BTC,
+      changeBtc: changeSat / SATOSHIS_IN_BTC,
+      recipientBtc: recipientSat / SATOSHIS_IN_BTC,
+      feeRate: signedPsbtSummary.feeRate,
+      virtualSize: signedPsbtSummary.virtualSize,
+    };
+  }, [signedPsbtSummary]);
+
+  const signedPsbtQrUri = useMemo(() => {
+    if (!signedPsbt?.psbtBase64) {
+      return null;
+    }
+    try {
+      const encoded = encodeURIComponent(signedPsbt.psbtBase64);
+      return `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encoded}`;
+    } catch (error) {
+      console.error('Erro ao montar QR da PSBT assinada', error);
+      return null;
+    }
+  }, [signedPsbt]);
+
+  const signedPsbtInputSummary = useMemo(() => {
+    if (!signedPsbtInput?.trim()) {
+      return null;
+    }
+    try {
+      return parsePsbtDetails(signedPsbtInput.trim());
+    } catch (error) {
+      return null;
+    }
+  }, [signedPsbtInput]);
+
+  const signedPsbtInputBreakdown = useMemo(() => {
+    if (!signedPsbtInputSummary) {
+      return null;
+    }
+    const changeSat = signedPsbtInputSummary.outputs
+      .filter((output) => output.isChange)
+      .reduce((sum, item) => sum + (item.value ?? 0), 0);
+    const recipientSat = signedPsbtInputSummary.totalOutput - changeSat;
+    return {
+      feeBtc: signedPsbtInputSummary.fee / SATOSHIS_IN_BTC,
+      changeBtc: changeSat / SATOSHIS_IN_BTC,
+      recipientBtc: recipientSat / SATOSHIS_IN_BTC,
+      feeRate: signedPsbtInputSummary.feeRate,
+      virtualSize: signedPsbtInputSummary.virtualSize,
+      fullySigned: signedPsbtInputSummary.fullySigned,
+    };
+  }, [signedPsbtInputSummary]);
+
+  const psbtQrUri = useMemo(() => {
+    if (!psbtDraft?.psbtBase64) {
+      return null;
+    }
+    try {
+      const encoded = encodeURIComponent(psbtDraft.psbtBase64);
+      return `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encoded}`;
+    } catch (error) {
+      console.error('Erro ao montar QR da PSBT', error);
+      return null;
+    }
+  }, [psbtDraft]);
 
   const feeOptions = useMemo(
     () => [
@@ -950,6 +1167,7 @@ const HomeScreen = ({ navigation }) => {
 
   const handleCloseSendModal = useCallback(() => {
     setIsScanning(false);
+    setScanMode(null);
     setSendModalVisible(false);
     setSendAddress('');
     setSendAmount('');
@@ -963,6 +1181,458 @@ const HomeScreen = ({ navigation }) => {
       sendStatusTimeoutRef.current = null;
     }
   }, []);
+
+  const handleOpenPsbtModal = useCallback(() => {
+    if (!isOnlineProtectedMode) {
+      showFeedback('info', 'O fluxo de PSBT esta disponivel apenas no modo online protegido.');
+      return;
+    }
+
+    if (!isOnline) {
+      showFeedback('error', 'Ative o modo online para gerar a PSBT.');
+      return;
+    }
+
+    if (!walletData?.accountXpub) {
+      showFeedback('error', 'xpub da conta indisponivel neste dispositivo.');
+      return;
+    }
+
+    if (hasPendingIncoming) {
+      const pendingText = formatBitcoinAmount(pendingIncomingBtc);
+      showFeedback(
+        'info',
+        `Existe uma transacao recebida pendente (~${pendingText} BTC). Aguarde a confirmacao antes de montar a PSBT.`,
+      );
+      return;
+    }
+
+    setPsbtAddress('');
+    setPsbtAmount('');
+    setPsbtStatus(null);
+    setPsbtDraft(null);
+    setCreatingPsbt(false);
+    setSignedPsbtInput('');
+    setBroadcastStatus(null);
+    setBroadcastingPsbt(false);
+    setFeeProfile('fastest');
+    setFeeError(null);
+    setFeeRate(null);
+    setPsbtModalVisible(true);
+  }, [
+    hasPendingIncoming,
+    isOnline,
+    isOnlineProtectedMode,
+    pendingIncomingBtc,
+    showFeedback,
+    walletData,
+  ]);
+
+  const handleClosePsbtModal = useCallback(() => {
+    setPsbtModalVisible(false);
+    setPsbtAddress('');
+    setPsbtAmount('');
+    setPsbtStatus(null);
+    setPsbtDraft(null);
+    setCreatingPsbt(false);
+    setSignedPsbtInput('');
+    setBroadcastStatus(null);
+    setBroadcastingPsbt(false);
+  }, []);
+
+  const handleCreatePsbt = useCallback(async () => {
+    if (creatingPsbt) {
+      return;
+    }
+
+    const trimmedAddress = psbtAddress.trim();
+
+    if (!trimmedAddress) {
+      const message = 'Informe o endereco de destino.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!feeRate || feeRate <= 0) {
+      const message = 'Nao foi possivel calcular a taxa de mineracao.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!walletData?.accountXpub) {
+      const message = 'xpub da conta indisponivel neste dispositivo.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!parsedPsbtAmount || parsedPsbtAmount <= 0) {
+      const message = 'Quantidade invalida de BTC.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    const totalToSpend = psbtEstimatedTotalBtc;
+    if (!Number.isFinite(totalToSpend) || totalToSpend <= 0) {
+      const message = 'Nao foi possivel calcular o total da transacao.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    if (totalToSpend > balance) {
+      const message = `Saldo insuficiente. Disponivel: ${formatBitcoinAmount(
+        balance,
+      )} BTC. Necessario: ${formatBitcoinAmount(totalToSpend)} BTC (valor + taxa).`;
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    if (hasPendingIncoming) {
+      const message = `Existe uma transacao de recebimento pendente (~${formatBitcoinAmount(
+        pendingIncomingBtc,
+      )} BTC). Aguarde a confirmacao para montar a PSBT.`;
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+      return;
+    }
+
+    setPsbtStatus(null);
+    setCreatingPsbt(true);
+
+    const nextChangeIndex =
+      Number.isInteger(walletData.changeIndex) && walletData.changeIndex >= 0
+        ? walletData.changeIndex
+        : (walletData.changeAddresses?.length ?? 0);
+
+    try {
+      const result = await createPsbtTransaction({
+        accountXpub: walletData.accountXpub,
+        masterFingerprint: walletData.masterFingerprint ?? null,
+        recipientAddress: trimmedAddress,
+        amountBtc: parsedPsbtAmount,
+        feeRate,
+        addressType: walletData.addressType ?? DEFAULT_ADDRESS_TYPE,
+        receivingAddresses: walletData.receivingAddresses ?? [],
+        changeAddresses: walletData.changeAddresses ?? [],
+        nextChangeIndex,
+      });
+
+      setPsbtDraft({
+        ...result,
+        recipientAddress: trimmedAddress,
+        amountBtc: parsedPsbtAmount,
+        feeRate,
+        nextChangeIndex,
+      });
+      setPsbtStatus({
+        type: 'success',
+        message: 'PSBT gerada. Escaneie com o dispositivo offline para assinar.',
+      });
+    } catch (error) {
+      console.error('Erro ao gerar PSBT', error);
+      const message = error?.message ?? 'Nao foi possivel gerar a PSBT.';
+      showFeedback('error', message);
+      setPsbtStatus({ type: 'error', message });
+    } finally {
+      setCreatingPsbt(false);
+    }
+  }, [
+    balance,
+    creatingPsbt,
+    feeRate,
+    hasPendingIncoming,
+    parsedPsbtAmount,
+    pendingIncomingBtc,
+    psbtAddress,
+    psbtEstimatedTotalBtc,
+    showFeedback,
+    walletData,
+  ]);
+
+  const handleCopyPsbtToClipboard = useCallback(() => {
+    if (!psbtDraft?.psbtBase64) {
+      showFeedback('error', 'PSBT indisponivel para copiar.');
+      return;
+    }
+
+    Clipboard.setStringAsync(psbtDraft.psbtBase64)
+      .then(() => {
+        showFeedback('success', 'PSBT copiada para a area de transferencia.');
+      })
+      .catch((error) => {
+        console.error('Erro ao copiar PSBT', error);
+        showFeedback('error', 'Nao foi possivel copiar a PSBT.');
+      });
+  }, [psbtDraft, showFeedback]);
+
+  const handlePasteSignedPsbt = useCallback(async () => {
+    try {
+      const clipboardValue = await Clipboard.getStringAsync();
+      const normalized = clipboardValue?.trim();
+      if (!normalized) {
+        showFeedback('error', 'Nenhuma PSBT assinada encontrada na area de transferencia.');
+        return;
+      }
+      setSignedPsbtInput(normalized);
+      setBroadcastStatus(null);
+      showFeedback('success', 'PSBT assinada colada da area de transferencia.');
+    } catch (error) {
+      console.error('Erro ao ler area de transferencia', error);
+      showFeedback('error', 'Nao foi possivel ler a area de transferencia.');
+    }
+  }, [showFeedback]);
+
+  const handleBroadcastPsbt = useCallback(async () => {
+    if (broadcastingPsbt) {
+      return;
+    }
+
+    if (!psbtDraft || !psbtDraftSummary) {
+      showFeedback('error', 'Nenhuma PSBT foi gerada neste dispositivo.');
+      setBroadcastStatus({
+        type: 'error',
+        message: 'Nenhuma PSBT foi gerada neste dispositivo.',
+      });
+      return;
+    }
+
+    if (!walletData) {
+      showFeedback('error', 'Dados da carteira indisponiveis.');
+      setBroadcastStatus({ type: 'error', message: 'Dados da carteira indisponiveis.' });
+      return;
+    }
+
+    const normalized = signedPsbtInput.trim();
+    if (!normalized) {
+      const message = 'Cole ou leia a PSBT assinada para transmitir.';
+      showFeedback('error', message);
+      setBroadcastStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!signedPsbtInputSummary) {
+      const message = 'PSBT assinada invalida.';
+      showFeedback('error', message);
+      setBroadcastStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!signedPsbtInputSummary.fullySigned) {
+      const message = 'A PSBT informada nao esta totalmente assinada.';
+      showFeedback('error', message);
+      setBroadcastStatus({ type: 'error', message });
+      return;
+    }
+
+    if (
+      signedPsbtInputSummary.totalInput !== psbtDraftSummary.totalInput ||
+      signedPsbtInputSummary.totalOutput !== psbtDraftSummary.totalOutput ||
+      signedPsbtInputSummary.fee !== psbtDraftSummary.fee
+    ) {
+      const message = 'A PSBT assinada nao corresponde ao rascunho atual.';
+      showFeedback('error', message);
+      setBroadcastStatus({ type: 'error', message });
+      return;
+    }
+
+    setBroadcastStatus(null);
+    setBroadcastingPsbt(true);
+
+    try {
+      const { txid } = await broadcastSignedPsbt(normalized);
+
+      const usedInputs = Array.isArray(psbtDraft.selectedUtxos)
+        ? psbtDraft.selectedUtxos.map((item) => item.source ?? { address: item.address })
+        : [];
+      const markUsed = (entry) => {
+        if (!entry) {
+          return entry;
+        }
+        const wasUsed = usedInputs.some((input) => input?.address === entry.address);
+        if (wasUsed && !entry.used) {
+          return { ...entry, used: true };
+        }
+        return entry;
+      };
+
+      const updatedReceiving = (walletData.receivingAddresses ?? []).map(markUsed);
+      let changeAddresses = (walletData.changeAddresses ?? []).map(markUsed);
+
+      let changeIndex =
+        Number.isInteger(walletData.changeIndex) && walletData.changeIndex >= 0
+          ? walletData.changeIndex
+          : walletData.changeAddresses?.length ?? 0;
+
+      if (psbtDraft.changeAddress?.address) {
+        const exists = changeAddresses.some(
+          (item) => item.address === psbtDraft.changeAddress.address,
+        );
+
+        if (exists) {
+          changeAddresses = changeAddresses.map((item) =>
+            item.address === psbtDraft.changeAddress.address ? { ...item, used: true } : item,
+          );
+        } else {
+          changeAddresses = [...changeAddresses, { ...psbtDraft.changeAddress, used: true }];
+        }
+
+        const changeIdx = psbtDraft.changeAddress.index ?? changeIndex;
+        changeIndex = Math.max(changeIndex, changeIdx + 1);
+      }
+
+      const updatedWallet = {
+        ...walletData,
+        receivingAddresses: updatedReceiving,
+        changeAddresses,
+        changeIndex,
+      };
+
+      await persistWalletData(updatedWallet);
+      await fetchWalletBalance(updatedWallet);
+
+      const successMessage = `Transacao transmitida com sucesso. TXID: ${txid}`;
+      setBroadcastStatus({ type: 'success', message: successMessage });
+      showFeedback('success', successMessage);
+      setPsbtDraft(null);
+      setSignedPsbtInput('');
+      setTimeout(() => {
+        handleClosePsbtModal();
+      }, 1200);
+    } catch (error) {
+      console.error('Erro ao transmitir PSBT', error);
+      const message = error?.message ?? 'Falha ao transmitir a transacao.';
+      setBroadcastStatus({ type: 'error', message });
+      showFeedback('error', message);
+    } finally {
+      setBroadcastingPsbt(false);
+    }
+  }, [
+    broadcastingPsbt,
+    fetchWalletBalance,
+    handleClosePsbtModal,
+    persistWalletData,
+    psbtDraft,
+    psbtDraftSummary,
+    showFeedback,
+    signedPsbtInput,
+    signedPsbtInputSummary,
+    walletData,
+  ]);
+
+  const handleOpenSignModal = useCallback(() => {
+    if (!isOfflineProtectedMode) {
+      showFeedback('info', 'O fluxo de assinatura esta disponivel apenas no modo offline protegido.');
+      return;
+    }
+
+    if (!hasSeedAvailable) {
+      showFeedback('error', 'Seed indisponivel neste dispositivo.');
+      return;
+    }
+
+    setPsbtToSign('');
+    setSignedPsbt(null);
+    setSignStatus(null);
+    setSigningPsbt(false);
+    setScanMode(null);
+    setIsScanning(false);
+    setSignModalVisible(true);
+  }, [hasSeedAvailable, isOfflineProtectedMode, showFeedback]);
+
+  const handleCloseSignModal = useCallback(() => {
+    setSignModalVisible(false);
+    setPsbtToSign('');
+    setSignedPsbt(null);
+    setSignStatus(null);
+    setSigningPsbt(false);
+    setScanMode(null);
+    setIsScanning(false);
+  }, []);
+
+  const handlePastePsbtFromClipboard = useCallback(async () => {
+    try {
+      const clipboardValue = await Clipboard.getStringAsync();
+      const normalized = clipboardValue?.trim();
+      if (!normalized) {
+        showFeedback('error', 'Nenhum conteudo valido na area de transferencia.');
+        return;
+      }
+      setPsbtToSign(normalized);
+      setSignStatus(null);
+      showFeedback('success', 'PSBT colada da area de transferencia.');
+    } catch (error) {
+      console.error('Erro ao ler area de transferencia', error);
+      showFeedback('error', 'Nao foi possivel ler a area de transferencia.');
+    }
+  }, [showFeedback]);
+
+  const handleSignPsbt = useCallback(() => {
+    if (signingPsbt) {
+      return;
+    }
+
+    const normalized = psbtToSign.trim();
+    if (!normalized) {
+      const message = 'Cole ou leia uma PSBT antes de assinar.';
+      showFeedback('error', message);
+      setSignStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!psbtToSignSummary) {
+      const message = 'PSBT invalida. Verifique o conteudo informado.';
+      showFeedback('error', message);
+      setSignStatus({ type: 'error', message });
+      return;
+    }
+
+    if (!hasSeedAvailable) {
+      const message = 'Seed indisponivel para assinar a PSBT.';
+      showFeedback('error', message);
+      setSignStatus({ type: 'error', message });
+      return;
+    }
+
+    setSignStatus(null);
+    setSigningPsbt(true);
+
+    try {
+      const signedBase64 = signPsbtWithSeedPhrase(normalized, seedPhrase);
+      setSignedPsbt({ psbtBase64: signedBase64 });
+      setSignStatus({
+        type: 'success',
+        message: 'PSBT assinada com sucesso. Escaneie o QR no dispositivo online para finalizar.',
+      });
+    } catch (error) {
+      console.error('Erro ao assinar PSBT', error);
+      const message = error?.message ?? 'Nao foi possivel assinar a PSBT.';
+      showFeedback('error', message);
+      setSignStatus({ type: 'error', message });
+    } finally {
+      setSigningPsbt(false);
+    }
+  }, [hasSeedAvailable, psbtToSign, psbtToSignSummary, seedPhrase, showFeedback, signingPsbt]);
+
+  const handleCopySignedPsbt = useCallback(() => {
+    if (!signedPsbt?.psbtBase64) {
+      showFeedback('error', 'Nenhuma PSBT assinada para copiar.');
+      return;
+    }
+
+    Clipboard.setStringAsync(signedPsbt.psbtBase64)
+      .then(() => {
+        showFeedback('success', 'PSBT assinada copiada para a area de transferencia.');
+      })
+      .catch((error) => {
+        console.error('Erro ao copiar PSBT assinada', error);
+        showFeedback('error', 'Nao foi possivel copiar a PSBT assinada.');
+      });
+  }, [showFeedback, signedPsbt]);
 
   const loadCameraModule = useCallback(async () => {
     if (cameraModuleRef.current) {
@@ -980,49 +1650,53 @@ const HomeScreen = ({ navigation }) => {
     }
   }, []);
 
-  const handleScanQrCode = useCallback(async () => {
-    if (sendingTransaction) {
-      return;
-    }
-
-    try {
-      const camera = await loadCameraModule();
-
-      const requestPermission =
-        camera?.Camera?.requestCameraPermissionsAsync ??
-        camera?.Camera?.requestPermissionsAsync ??
-        camera?.requestCameraPermissionsAsync ??
-        camera?.requestPermissionsAsync;
-
-      if (!requestPermission) {
-        showFeedback('error', 'Camera nao disponivel neste dispositivo.');
+  const handleScanQrCode = useCallback(
+    async (mode = 'send') => {
+      if (mode === 'send' && sendingTransaction) {
         return;
       }
 
-      const permission = await requestPermission();
+      try {
+        const camera = await loadCameraModule();
 
-      if (!permission?.granted) {
-        showFeedback('error', 'Permissao de camera negada.');
-        return;
+        const requestPermission =
+          camera?.Camera?.requestCameraPermissionsAsync ??
+          camera?.Camera?.requestPermissionsAsync ??
+          camera?.requestCameraPermissionsAsync ??
+          camera?.requestPermissionsAsync;
+
+        if (!requestPermission) {
+          showFeedback('error', 'Camera nao disponivel neste dispositivo.');
+          return;
+        }
+
+        const permission = await requestPermission();
+
+        if (!permission?.granted) {
+          showFeedback('error', 'Permissao de camera negada.');
+          return;
+        }
+
+        const hasCameraView = Boolean(camera?.CameraView);
+        const hasLegacyCamera = Boolean(camera?.Camera);
+
+        if (!hasCameraView && !hasLegacyCamera) {
+          showFeedback('error', 'Leitor de QR Code indisponivel neste dispositivo.');
+          setCameraModuleError('Leitor de QR Code indisponivel neste dispositivo.');
+          return;
+        }
+
+        setCameraModuleError(null);
+        setScanMode(mode);
+        setIsScanning(true);
+      } catch (error) {
+        console.error('Erro ao preparar camera para leitura de QR Code', error);
+        setCameraModuleError('Nao foi possivel acessar a camera do dispositivo.');
+        showFeedback('error', 'Nao foi possivel acessar a camera do dispositivo.');
       }
-
-      const hasCameraView = Boolean(camera?.CameraView);
-      const hasLegacyCamera = Boolean(camera?.Camera);
-
-      if (!hasCameraView && !hasLegacyCamera) {
-        showFeedback('error', 'Leitor de QR Code indisponivel neste dispositivo.');
-        setCameraModuleError('Leitor de QR Code indisponivel neste dispositivo.');
-        return;
-      }
-
-      setCameraModuleError(null);
-      setIsScanning(true);
-    } catch (error) {
-      console.error('Erro ao preparar camera para leitura de QR Code', error);
-      setCameraModuleError('Nao foi possivel acessar a camera do dispositivo.');
-      showFeedback('error', 'Nao foi possivel acessar a camera do dispositivo.');
-    }
-  }, [loadCameraModule, sendingTransaction, showFeedback]);
+    },
+    [loadCameraModule, sendingTransaction, showFeedback],
+  );
 
   const handleQrCodeScanned = useCallback(
     ({ data }) => {
@@ -1032,6 +1706,46 @@ const HomeScreen = ({ navigation }) => {
 
       if (!data) {
         showFeedback('error', 'QR Code invalido.');
+        return;
+      }
+
+      if (scanMode === 'psbt') {
+        const normalized = data.trim();
+        if (!normalized) {
+          showFeedback('error', 'PSBT invalida.');
+          return;
+        }
+
+        setIsScanning(false);
+        setScanMode(null);
+        setPsbtToSign(normalized);
+        setSignStatus(null);
+        try {
+          parsePsbtDetails(normalized);
+          showFeedback('success', 'PSBT importada com sucesso.');
+        } catch (error) {
+          showFeedback('error', error?.message ?? 'PSBT invalida.');
+        }
+        return;
+      }
+
+      if (scanMode === 'broadcast') {
+        const normalized = data.trim();
+        if (!normalized) {
+          showFeedback('error', 'PSBT assinada invalida.');
+          return;
+        }
+
+        setIsScanning(false);
+        setScanMode(null);
+        setSignedPsbtInput(normalized);
+        setBroadcastStatus(null);
+        try {
+          parsePsbtDetails(normalized);
+          showFeedback('success', 'PSBT assinada importada com sucesso.');
+        } catch (error) {
+          showFeedback('error', error?.message ?? 'PSBT assinada invalida.');
+        }
         return;
       }
 
@@ -1061,7 +1775,7 @@ const HomeScreen = ({ navigation }) => {
       }
 
       if (!extractedAddress) {
-        showFeedback('error', 'QR Code nao contem um endereco valido.');
+        showFeedback('error', 'Endereco extraido do QR Code invalido.');
         return;
       }
 
@@ -1070,26 +1784,27 @@ const HomeScreen = ({ navigation }) => {
         setSendAmount(extractedAmount);
       }
       setSendPercentage(null);
-
+      setScanMode(null);
       setIsScanning(false);
-      showFeedback('success', 'Endereco preenchido via QR Code.');
+      showFeedback('success', 'Endereco carregado do QR Code.');
     },
-    [isScanning, setSendAddress, setSendAmount, showFeedback],
+    [isScanning, scanMode, showFeedback],
   );
-
   const CameraComponent = cameraSupport?.Component ?? null;
   const cameraComponentProps =
     CameraComponent && cameraSupport ? cameraSupport.getProps(handleQrCodeScanned) : null;
 
   const handleCancelScan = useCallback(() => {
     setIsScanning(false);
+    setScanMode(null);
   }, []);
 
   const handleSelectFeeProfile = useCallback(
     (profile) => {
       setFeeProfile(profile);
       setSendStatus(null);
-      if (sendModalVisible) {
+      setPsbtStatus(null);
+      if (isFeeModalActive) {
         if (feeIntervalRef.current) {
           clearInterval(feeIntervalRef.current);
           feeIntervalRef.current = null;
@@ -1097,7 +1812,7 @@ const HomeScreen = ({ navigation }) => {
         fetchMinerFee();
       }
     },
-    [fetchMinerFee, sendModalVisible],
+    [fetchMinerFee, isFeeModalActive],
   );
 
   const fetchMinerFee = useCallback(async () => {
@@ -1147,7 +1862,7 @@ const HomeScreen = ({ navigation }) => {
   }, [feeProfile, isOnline]);
 
   useEffect(() => {
-    if (!sendModalVisible) {
+    if (!isFeeModalActive) {
       setFeeRate(null);
       setFeeError(null);
       setFeeUpdating(false);
@@ -1181,7 +1896,7 @@ const HomeScreen = ({ navigation }) => {
         feeIntervalRef.current = null;
       }
     };
-  }, [fetchMinerFee, feeProfile, isOnline, sendModalVisible]);
+  }, [fetchMinerFee, feeProfile, isOnline, isFeeModalActive]);
 
   useEffect(() => {
     return () => {
@@ -2015,24 +2730,24 @@ const HomeScreen = ({ navigation }) => {
             style={[
               styles.quickActionButton,
               styles.sendButton,
-              hasPendingIncoming || !canInitiateDirectSend ? styles.quickActionButtonDisabled : null,
+              isPrimaryActionDisabled ? styles.quickActionButtonDisabled : null,
             ]}
-            onPress={handleSendBitcoin}
-            disabled={hasPendingIncoming || !canInitiateDirectSend}
+            onPress={handlePrimaryAction}
+            disabled={isPrimaryActionDisabled}
           >
             <Feather
               name="arrow-up-right"
               size={18}
-              color={hasPendingIncoming || !canInitiateDirectSend ? colors.mutedForeground : colors.primaryText}
+              color={isPrimaryActionDisabled ? colors.mutedForeground : colors.primaryText}
               style={styles.quickActionIcon}
             />
             <Text
               style={[
                 styles.quickActionText,
-                hasPendingIncoming || !canInitiateDirectSend ? styles.quickActionTextDisabled : null,
+                isPrimaryActionDisabled ? styles.quickActionTextDisabled : null,
               ]}
             >
-              Enviar BTC
+              {primaryActionLabel}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -2156,6 +2871,543 @@ const HomeScreen = ({ navigation }) => {
         </View>
       ) : null}
       <Modal
+        visible={psbtModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleClosePsbtModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Gerar PSBT</Text>
+            {psbtDraft ? (
+              <>
+                {psbtStatus?.message ? (
+                  <Text
+                    style={
+                      psbtStatus.type === 'error' ? styles.sendErrorText : styles.sendSuccessText
+                    }
+                  >
+                    {psbtStatus.message}
+                  </Text>
+                ) : null}
+                <View style={[styles.feeInfo, { marginTop: 12 }]}>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Valor</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {formatBitcoinAmount(psbtDraft.amountBtc)} BTC
+                    </Text>
+                  </View>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Taxa</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {formatBitcoinAmount(psbtFeeBtc)} BTC
+                    </Text>
+                  </View>
+                  <Text style={styles.feeInfoMeta}>
+                    {psbtFeeRatePerVbyte
+                      ? `${psbtFeeRatePerVbyte.toFixed(1)} sat/vB | ${
+                          psbtDraftSummary?.virtualSize ?? 0
+                        } vB`
+                      : 'Taxa estimada indisponivel'}
+                  </Text>
+                  {psbtChangeBtc > 0 ? (
+                    <Text style={styles.feeInfoMeta}>
+                      Troco: {formatBitcoinAmount(psbtChangeBtc)} BTC
+                    </Text>
+                  ) : null}
+                </View>
+                {psbtQrUri ? (
+                  <Image
+                    source={{ uri: psbtQrUri }}
+                    style={[styles.receiveModalQr, { marginTop: 12 }]}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                    QR Code indisponivel. Use o botao abaixo para copiar a PSBT.
+                  </Text>
+                )}
+                <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                  Escaneie este QR com o dispositivo offline protegido para assinar.
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalPrimaryButton}
+                  onPress={handleCopyPsbtToClipboard}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>Copiar PSBT</Text>
+                </TouchableOpacity>
+                <Text style={[styles.modalDividerText, { marginTop: 16 }]}>
+                  Importar PSBT assinada
+                </Text>
+                <View style={[styles.sendModalOptions, { marginTop: 8 }]}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={() => handleScanQrCode('broadcast')}
+                  >
+                    <Feather name="camera" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Ler QR Code</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={handlePasteSignedPsbt}
+                  >
+                    <Feather name="clipboard" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Colar</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  value={signedPsbtInput}
+                  onChangeText={(value) => {
+                    setSignedPsbtInput(value);
+                    setBroadcastStatus(null);
+                  }}
+                  placeholder="Cole a PSBT assinada aqui"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={[styles.modalInput, { height: 120, textAlignVertical: 'top' }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                />
+                {signedPsbtInputSummary ? (
+                  <View style={[styles.feeInfo, { marginTop: 12 }]}>
+                    <View style={styles.feeInfoLine}>
+                      <Text style={styles.feeInfoLabel}>Valor</Text>
+                      <Text style={styles.feeInfoValue}>
+                        {signedPsbtInputBreakdown
+                          ? `${formatBitcoinAmount(signedPsbtInputBreakdown.recipientBtc)} BTC`
+                          : '-'}
+                      </Text>
+                    </View>
+                    <View style={styles.feeInfoLine}>
+                      <Text style={styles.feeInfoLabel}>Taxa</Text>
+                      <Text style={styles.feeInfoValue}>
+                        {signedPsbtInputBreakdown
+                          ? `${formatBitcoinAmount(signedPsbtInputBreakdown.feeBtc)} BTC`
+                          : '-'}
+                      </Text>
+                    </View>
+                    {signedPsbtInputBreakdown?.feeRate ? (
+                      <Text style={styles.feeInfoMeta}>
+                        {signedPsbtInputBreakdown.feeRate.toFixed(1)} sat/vB | {' '}
+                        {signedPsbtInputBreakdown.virtualSize ?? 0} vB
+                      </Text>
+                    ) : null}
+                    {signedPsbtInputBreakdown?.changeBtc > 0 ? (
+                      <Text style={styles.feeInfoMeta}>
+                        Troco: {formatBitcoinAmount(signedPsbtInputBreakdown.changeBtc)} BTC
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : signedPsbtInput.trim() ? (
+                  <Text style={[styles.sendErrorText, { marginTop: 12 }]}>
+                    PSBT assinada invalida. Verifique o conteudo informado.
+                  </Text>
+                ) : (
+                  <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                    Escaneie ou cole a PSBT assinada para validar e transmitir.
+                  </Text>
+                )}
+                {broadcastStatus?.message ? (
+                  <Text
+                    style={
+                      broadcastStatus.type === 'error' ? styles.sendErrorText : styles.sendSuccessText
+                    }
+                  >
+                    {broadcastStatus.message}
+                  </Text>
+                ) : null}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.modalPrimaryButton,
+                    broadcastingPsbt || !signedPsbtInputSummary
+                      ? styles.modalPrimaryButtonDisabled
+                      : null,
+                  ]}
+                  onPress={handleBroadcastPsbt}
+                  disabled={broadcastingPsbt || !signedPsbtInputSummary}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>
+                    {broadcastingPsbt ? 'Transmitindo...' : 'Importar e transmitir'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={() => {
+                    setPsbtDraft(null);
+                    setPsbtStatus(null);
+                    setSignedPsbtInput('');
+                    setBroadcastStatus(null);
+                    setBroadcastingPsbt(false);
+                  }}
+                >
+                  <Text style={styles.modalCloseText}>Gerar outra PSBT</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={handleClosePsbtModal}
+                >
+                  <Text style={styles.modalCloseText}>Fechar</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                {psbtStatus?.message ? (
+                  <Text
+                    style={
+                      psbtStatus.type === 'error' ? styles.sendErrorText : styles.sendSuccessText
+                    }
+                  >
+                    {psbtStatus.message}
+                  </Text>
+                ) : null}
+                <TextInput
+                  value={psbtAddress}
+                  onChangeText={(value) => {
+                    setPsbtAddress(value);
+                    setPsbtStatus(null);
+                  }}
+                  placeholder="Endereco do destinatario"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={styles.modalInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TextInput
+                  value={psbtAmount}
+                  onChangeText={(value) => {
+                    setPsbtAmount(value);
+                    setPsbtStatus(null);
+                  }}
+                  placeholder="Quantidade de BTC"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={styles.modalInput}
+                  keyboardType="decimal-pad"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <View style={styles.feeOptionsRow}>
+                  {feeOptions.map((option) => {
+                    const isActive = option.key === feeProfile;
+                    return (
+                      <TouchableOpacity
+                        key={option.key}
+                        activeOpacity={0.85}
+                        disabled={feeUpdating}
+                        style={[
+                          styles.feeOptionButton,
+                          isActive ? styles.feeOptionButtonActive : null,
+                          feeUpdating ? styles.modalPrimaryButtonDisabled : null,
+                        ]}
+                        onPress={() => handleSelectFeeProfile(option.key)}
+                      >
+                        <Text
+                          style={[
+                            styles.feeOptionText,
+                            isActive ? styles.feeOptionTextActive : null,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.feeOptionDescription,
+                            isActive ? styles.feeOptionDescriptionActive : null,
+                          ]}
+                        >
+                          {option.description}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.feeInfo}>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Taxa estimada</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {feeRate ? `${formatBitcoinAmount(estimatedFeeBtc)} BTC` : '-'}
+                    </Text>
+                  </View>
+                  <Text style={styles.feeInfoMeta}>
+                    {feeUpdating
+                      ? 'Atualizando taxa...'
+                      : feeError
+                      ? feeError
+                      : feeRate
+                      ? `${feeRate.toFixed(0)} sat/vB (estimativa)`
+                      : 'Taxa indisponivel'}
+                  </Text>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Total com taxa</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {parsedPsbtAmount > 0 || estimatedFeeBtc > 0
+                        ? `${formatBitcoinAmount(psbtEstimatedTotalBtc)} BTC`
+                        : '-'}
+                    </Text>
+                  </View>
+                  {btcPriceUsd && (parsedPsbtAmount > 0 || estimatedFeeBtc > 0) ? (
+                    <Text style={styles.feeInfoSecondary}>
+                      ~ ${psbtEstimatedTotalUsd?.toFixed(2) ?? '0.00'} USD
+                    </Text>
+                  ) : null}
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.modalPrimaryButton,
+                    creatingPsbt || feeUpdating || !feeRate ? styles.modalPrimaryButtonDisabled : null,
+                  ]}
+                  onPress={handleCreatePsbt}
+                  disabled={creatingPsbt || feeUpdating || !feeRate}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>
+                    {creatingPsbt ? 'Gerando...' : 'Gerar PSBT'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={handleClosePsbtModal}
+                >
+                  <Text style={styles.modalCloseText}>Cancelar</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={signModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseSignModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Assinar PSBT</Text>
+            {isScanning && scanMode === 'psbt' ? (
+              <>
+                {CameraComponent && cameraComponentProps ? (
+                  <>
+                    <View style={styles.qrScannerContainer}>
+                      <CameraComponent {...cameraComponentProps} />
+                    </View>
+                    <Text style={styles.qrScannerHint}>Aponte para o QR Code da PSBT</Text>
+                  </>
+                ) : (
+                  <View style={styles.qrScannerFallback}>
+                    <Feather name="camera-off" size={36} color={colors.mutedForeground} />
+                    <Text style={styles.qrScannerFallbackText}>
+                      {cameraModuleError ??
+                        'Camera indisponivel. Verifique se o dispositivo suporta leitura de QR code.'}
+                    </Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.qrScannerCancel}
+                  onPress={handleCancelScan}
+                >
+                  <Text style={styles.qrScannerCancelText}>Cancelar leitura</Text>
+                </TouchableOpacity>
+              </>
+            ) : signedPsbt ? (
+              <>
+                {signStatus?.message ? (
+                  <Text
+                    style={
+                      signStatus.type === 'error' ? styles.sendErrorText : styles.sendSuccessText
+                    }
+                  >
+                    {signStatus.message}
+                  </Text>
+                ) : null}
+                <View style={[styles.feeInfo, { marginTop: 12 }]}>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Valor</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {signedPsbtBreakdown
+                        ? `${formatBitcoinAmount(signedPsbtBreakdown.recipientBtc)} BTC`
+                        : '-'}
+                    </Text>
+                  </View>
+                  <View style={styles.feeInfoLine}>
+                    <Text style={styles.feeInfoLabel}>Taxa</Text>
+                    <Text style={styles.feeInfoValue}>
+                      {signedPsbtBreakdown
+                        ? `${formatBitcoinAmount(signedPsbtBreakdown.feeBtc)} BTC`
+                        : '-'}
+                    </Text>
+                  </View>
+                  {signedPsbtBreakdown?.feeRate ? (
+                    <Text style={styles.feeInfoMeta}>
+                      {signedPsbtBreakdown.feeRate.toFixed(1)} sat/vB | {' '}
+                      {signedPsbtBreakdown.virtualSize ?? 0} vB
+                    </Text>
+                  ) : null}
+                  {signedPsbtBreakdown?.changeBtc > 0 ? (
+                    <Text style={styles.feeInfoMeta}>
+                      Troco: {formatBitcoinAmount(signedPsbtBreakdown.changeBtc)} BTC
+                    </Text>
+                  ) : null}
+                </View>
+                {signedPsbtQrUri ? (
+                  <Image
+                    source={{ uri: signedPsbtQrUri }}
+                    style={[styles.receiveModalQr, { marginTop: 12 }]}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                    QR Code indisponivel. Copie a PSBT assinada para transferir manualmente.
+                  </Text>
+                )}
+                <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                  Escaneie este QR com o dispositivo online protegido para importar a PSBT assinada.
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalPrimaryButton}
+                  onPress={handleCopySignedPsbt}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>Copiar PSBT assinada</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={() => {
+                    setSignedPsbt(null);
+                    setSignStatus(null);
+                  }}
+                >
+                  <Text style={styles.modalCloseText}>Assinar outra PSBT</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={handleCloseSignModal}
+                >
+                  <Text style={styles.modalCloseText}>Fechar</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                {signStatus?.message ? (
+                  <Text
+                    style={
+                      signStatus.type === 'error' ? styles.sendErrorText : styles.sendSuccessText
+                    }
+                  >
+                    {signStatus.message}
+                  </Text>
+                ) : null}
+                <View style={styles.sendModalOptions}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={() => handleScanQrCode('psbt')}
+                  >
+                    <Feather name="camera" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Ler QR Code</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={handlePastePsbtFromClipboard}
+                  >
+                    <Feather name="clipboard" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Colar</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  value={psbtToSign}
+                  onChangeText={(value) => {
+                    setPsbtToSign(value);
+                    setSignStatus(null);
+                    setSignedPsbt(null);
+                  }}
+                  placeholder="Cole a PSBT em formato Base64"
+                  placeholderTextColor={colors.mutedForeground}
+                  style={[styles.modalInput, { height: 120, textAlignVertical: 'top' }]}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  multiline
+                />
+                {psbtToSignSummary ? (
+                  <View style={[styles.feeInfo, { marginTop: 12 }]}>
+                    <View style={styles.feeInfoLine}>
+                      <Text style={styles.feeInfoLabel}>Valor</Text>
+                      <Text style={styles.feeInfoValue}>
+                        {psbtToSignBreakdown
+                          ? `${formatBitcoinAmount(psbtToSignBreakdown.recipientBtc)} BTC`
+                          : '-'}
+                      </Text>
+                    </View>
+                    <View style={styles.feeInfoLine}>
+                      <Text style={styles.feeInfoLabel}>Taxa</Text>
+                      <Text style={styles.feeInfoValue}>
+                        {psbtToSignBreakdown
+                          ? `${formatBitcoinAmount(psbtToSignBreakdown.feeBtc)} BTC`
+                          : '-'}
+                      </Text>
+                    </View>
+                    {psbtToSignBreakdown?.feeRate ? (
+                      <Text style={styles.feeInfoMeta}>
+                        {psbtToSignBreakdown.feeRate.toFixed(1)} sat/vB | {' '}
+                        {psbtToSignBreakdown.virtualSize ?? 0} vB
+                      </Text>
+                    ) : null}
+                    {psbtToSignBreakdown?.changeBtc > 0 ? (
+                      <Text style={styles.feeInfoMeta}>
+                        Troco: {formatBitcoinAmount(psbtToSignBreakdown.changeBtc)} BTC
+                      </Text>
+                    ) : null}
+                    <Text style={styles.feeInfoMeta}>
+                      Entradas: {psbtToSignSummary.inputs.length} | Saidas:{' '}
+                      {psbtToSignSummary.outputs.length}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={[styles.modalHint, { marginTop: 12 }]}>
+                    Cole ou leia o QR Code da PSBT para visualizar o resumo.
+                  </Text>
+                )}
+                {psbtToSign?.trim() && !psbtToSignSummary ? (
+                  <Text style={[styles.sendErrorText, { marginTop: 12 }]}>
+                    PSBT invalida. Verifique o conteudo informado.
+                  </Text>
+                ) : null}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.modalPrimaryButton,
+                    signingPsbt || !psbtToSignSummary ? styles.modalPrimaryButtonDisabled : null,
+                  ]}
+                  onPress={handleSignPsbt}
+                  disabled={signingPsbt || !psbtToSignSummary}
+                >
+                  <Text style={styles.modalPrimaryButtonText}>
+                    {signingPsbt ? 'Assinando...' : 'Assinar PSBT'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.modalClose}
+                  onPress={handleCloseSignModal}
+                >
+                  <Text style={styles.modalCloseText}>Cancelar</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+      <Modal
         visible={sendModalVisible}
         transparent
         animationType="fade"
@@ -2164,7 +3416,7 @@ const HomeScreen = ({ navigation }) => {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Enviar BTC</Text>
-            {isScanning ? (
+            {isScanning && scanMode === 'send' ? (
               <>
                 {CameraComponent && cameraComponentProps ? (
                   <>
@@ -2200,7 +3452,7 @@ const HomeScreen = ({ navigation }) => {
                       styles.modalOptionButton,
                       sendingTransaction ? styles.modalOptionButtonDisabled : null,
                     ]}
-                    onPress={handleScanQrCode}
+                    onPress={() => handleScanQrCode('send')}
                   >
                     <Feather name="camera" size={18} color={colors.primaryText} />
                     <Text style={styles.modalOptionButtonText}>Ler QR Code</Text>

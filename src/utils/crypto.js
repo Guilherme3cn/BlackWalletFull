@@ -145,6 +145,23 @@ const base58CheckEncode = (data) => {
   return base58Encode(concatBytes(data, checksum));
 };
 
+const fingerprintHexToBuffer = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const sanitized = value.trim().replace(/^0x/i, '').toLowerCase();
+  if (!sanitized || sanitized.length !== 8 || !/^[0-9a-f]+$/i.test(sanitized)) {
+    return null;
+  }
+
+  try {
+    return Buffer.from(sanitized, 'hex');
+  } catch (error) {
+    return null;
+  }
+};
+
 const hash160 = (data) => ripemd160(sha256(data));
 
 const sha256d = (data) => sha256(sha256(data));
@@ -796,6 +813,204 @@ const selectUtxosForAmount = (utxos, targetAmount, feeRate) => {
   };
 };
 
+const prepareTransactionTemplate = async ({
+  seedPhrase,
+  accountXpub,
+  recipientAddress,
+  amountBtc,
+  feeRate,
+  addressType = DEFAULT_ADDRESS_TYPE,
+  receivingAddresses = [],
+  changeAddresses = [],
+  nextChangeIndex = 0,
+}) => {
+  const normalizedSeed = Array.isArray(seedPhrase) && seedPhrase.length ? seedPhrase : null;
+
+  if (!normalizedSeed && !accountXpub) {
+    throw new Error('Seed phrase ou account xpub necessario para derivacao.');
+  }
+
+  if (!recipientAddress) {
+    throw new Error('Informe um endereco de destino.');
+  }
+
+  if (!Number.isFinite(amountBtc) || amountBtc <= 0) {
+    throw new Error('Informe uma quantidade valida de BTC.');
+  }
+
+  if (!Number.isFinite(feeRate) || feeRate <= 0) {
+    throw new Error('Taxa de mineracao invalida.');
+  }
+
+  const normalizedType = normalizeAddressType(addressType);
+  if (normalizedType !== 'bech32') {
+    throw new Error('Fluxo suportado apenas para enderecos bech32 no momento.');
+  }
+
+  if (!Number.isInteger(nextChangeIndex) || nextChangeIndex < 0) {
+    throw new Error('Indice de troco invalido.');
+  }
+
+  const trackedEntries = [...receivingAddresses, ...changeAddresses]
+    .filter((item) => item?.address)
+    .map((item) => ({
+      address: item.address,
+      index: Number.isInteger(item.index) && item.index >= 0 ? item.index : 0,
+      change: Boolean(item.change),
+      type: item.type ?? normalizedType,
+    }));
+
+  if (!trackedEntries.length) {
+    throw new Error('Nenhum endereco derivado encontrado para esta carteira.');
+  }
+
+  const uniqueEntries = Array.from(
+    trackedEntries.reduce((map, entry) => {
+      if (!map.has(entry.address)) {
+        map.set(entry.address, entry);
+      }
+      return map;
+    }, new Map()),
+    ([, value]) => value,
+  );
+
+  const amountSat = Math.round(amountBtc * SATOSHIS_IN_BTC);
+
+  const utxoGroups = await Promise.all(
+    uniqueEntries.map(async (entry) => {
+      const utxosForAddress = await fetchAddressUtxos(entry.address);
+      return utxosForAddress.map((utxo) => ({
+        ...utxo,
+        address: entry.address,
+        source: {
+          address: entry.address,
+          index: entry.index,
+          change: entry.change,
+          type: entry.type,
+        },
+      }));
+    }),
+  );
+
+  const utxos = utxoGroups.flat();
+  if (!utxos.length) {
+    throw new Error('Nao ha UTXOs disponiveis para esta carteira.');
+  }
+
+  const { selected, fee, change, changeBelowDust } = selectUtxosForAmount(utxos, amountSat, feeRate);
+
+  let recipientScript;
+  try {
+    recipientScript = Uint8Array.from(bitcoin.address.toOutputScript(recipientAddress, BITCOIN_NETWORK));
+  } catch (error) {
+    throw new Error('Endereco de destino invalido.');
+  }
+
+  const inputs = selected.map((utxo) => {
+    const source = utxo.source ?? {};
+    const details = getWalletDetails(normalizedSeed, {
+      type: source.type ?? normalizedType,
+      change: Boolean(source.change),
+      index: Number.isInteger(source.index) ? source.index : 0,
+      accountXpub: normalizedSeed ? undefined : accountXpub,
+    });
+
+    if (!details?.publicKey || !details?.outputScript) {
+      throw new Error('Falha ao derivar dados publicos para uma entrada.');
+    }
+
+    return {
+      txid: utxo.txid,
+      vout: utxo.vout,
+      value: utxo.value,
+      sequence: DEFAULT_SEQUENCE,
+      publicKey: details.publicKey,
+      privateKey: details.privateKey ?? null,
+      pubKeyHash: details.pubKeyHash,
+      outputScript: details.outputScript,
+      path: details.path,
+      accountPath: details.accountPath,
+      address: details.address,
+      change: Boolean(source.change),
+      index: Number.isInteger(source.index) ? source.index : 0,
+      type: source.type ?? normalizedType,
+    };
+  });
+
+  const outputs = [
+    {
+      value: amountSat,
+      script: recipientScript,
+      address: recipientAddress,
+      isChange: false,
+      type: normalizedType,
+      path: null,
+      publicKey: null,
+    },
+  ];
+
+  let changeDetails = null;
+  if (change > 0) {
+    const details = getWalletDetails(normalizedSeed, {
+      type: normalizedType,
+      change: true,
+      index: nextChangeIndex,
+      accountXpub: normalizedSeed ? undefined : accountXpub,
+    });
+
+    if (!details?.publicKey || !details?.outputScript) {
+      throw new Error('Falha ao derivar endereco de troco.');
+    }
+
+    outputs.push({
+      value: change,
+      script: details.outputScript,
+      address: details.address,
+      isChange: true,
+      type: normalizedType,
+      path: details.path,
+      publicKey: details.publicKey,
+    });
+
+    changeDetails = {
+      address: details.address,
+      index: nextChangeIndex,
+      change: true,
+      type: normalizedType,
+      path: details.path,
+      publicKey: details.publicKey,
+      outputScript: details.outputScript,
+    };
+  }
+
+  const txOutputs = outputs.map((item) => ({
+    value: item.value,
+    script: item.script,
+  }));
+
+  const inputCount = inputs.length;
+  const outputCount = outputs.length;
+  const virtualSize = estimateFee(inputCount, outputCount, 1);
+  const totalInputValue = selected.reduce((sum, item) => sum + item.value, 0);
+
+  return {
+    inputs,
+    outputs,
+    txOutputs,
+    fee,
+    change,
+    changeBelowDust,
+    changeDetails,
+    selectedUtxos: selected,
+    amountSat,
+    recipientAddress,
+    recipientScript,
+    normalizedType,
+    virtualSize,
+    totalInputValue,
+  };
+};
+
 const computeTransactionHashes = (inputs, outputs) => {
   const prevouts = concatBytes(
     ...inputs.map((input) => concatBytes(hexToReverseBytes(input.txid), toUint32LE(input.vout))),
@@ -913,130 +1128,22 @@ export const sendBitcoinTransaction = async ({
     throw new Error('Frase semente invalida.');
   }
 
-  if (!recipientAddress) {
-    throw new Error('Informe um endereco de destino.');
-  }
-
-  if (!Number.isFinite(amountBtc) || amountBtc <= 0) {
-    throw new Error('Informe uma quantidade valida de BTC.');
-  }
-
-  if (!Number.isFinite(feeRate) || feeRate <= 0) {
-    throw new Error('Taxa de mineracao invalida.');
-  }
-
-  const normalizedType = normalizeAddressType(addressType);
-  if (normalizedType !== 'bech32') {
-    throw new Error('Envio suportado apenas para enderecos bech32 no momento.');
-  }
-
-  if (!Number.isInteger(nextChangeIndex) || nextChangeIndex < 0) {
-    throw new Error('Indice de troco invalido.');
-  }
-
-  const trackedEntries = [...receivingAddresses, ...changeAddresses]
-    .filter((item) => item?.address)
-    .map((item) => ({
-      address: item.address,
-      index: Number.isInteger(item.index) && item.index >= 0 ? item.index : 0,
-      change: Boolean(item.change),
-      type: item.type ?? normalizedType,
-    }));
-
-  if (!trackedEntries.length) {
-    throw new Error('Nenhum endereco derivado encontrado para esta carteira.');
-  }
-
-  const uniqueEntries = Array.from(
-    trackedEntries.reduce((map, entry) => {
-      if (!map.has(entry.address)) {
-        map.set(entry.address, entry);
-      }
-      return map;
-    }, new Map()),
-    ([, value]) => value,
-  );
-
-  const amountSat = Math.round(amountBtc * SATOSHIS_IN_BTC);
-
-  const utxoGroups = await Promise.all(
-    uniqueEntries.map(async (entry) => {
-      const utxosForAddress = await fetchAddressUtxos(entry.address);
-      return utxosForAddress.map((utxo) => ({
-        ...utxo,
-        address: entry.address,
-        source: {
-          address: entry.address,
-          index: entry.index,
-          change: entry.change,
-          type: entry.type,
-        },
-      }));
-    }),
-  );
-
-  const utxos = utxoGroups.flat();
-  if (!utxos.length) {
-    throw new Error('Nao ha UTXOs disponiveis para esta carteira.');
-  }
-
-  const { selected, fee, change, changeBelowDust } = selectUtxosForAmount(utxos, amountSat, feeRate);
-
-  const inputs = selected.map((utxo) => {
-    const source = utxo.source ?? {};
-    const details = getWalletDetails(seedPhrase, {
-      type: source.type ?? normalizedType,
-      change: Boolean(source.change),
-      index: Number.isInteger(source.index) ? source.index : 0,
-    });
-
-    return {
-      txid: utxo.txid,
-      vout: utxo.vout,
-      value: utxo.value,
-      sequence: DEFAULT_SEQUENCE,
-      privateKey: details.privateKey,
-      publicKey: details.publicKey,
-      pubKeyHash: details.pubKeyHash,
-    };
+  const plan = await prepareTransactionTemplate({
+    seedPhrase,
+    accountXpub: null,
+    recipientAddress,
+    amountBtc,
+    feeRate,
+    addressType,
+    receivingAddresses,
+    changeAddresses,
+    nextChangeIndex,
   });
 
-  let recipientScript;
-  try {
-    recipientScript = Uint8Array.from(bitcoin.address.toOutputScript(recipientAddress, BITCOIN_NETWORK));
-  } catch (error) {
-    throw new Error('Endereco de destino invalido.');
-  }
-
-  const outputs = [
-    {
-      value: amountSat,
-      script: recipientScript,
-    },
-  ];
-
-  let changeAddressInfo = null;
-  if (change > 0) {
-    const changeDetails = getWalletDetails(seedPhrase, {
-      type: normalizedType,
-      change: true,
-      index: nextChangeIndex,
-    });
-
-    outputs.push({
-      value: change,
-      script: changeDetails.outputScript,
-    });
-
-    changeAddressInfo = {
-      address: changeDetails.address,
-      index: nextChangeIndex,
-      change: true,
-      type: normalizedType,
-    };
-  }
-
-  const { rawTransaction, txid, vsize } = buildSignedTransaction({ inputs, outputs });
+  const { rawTransaction, txid, vsize } = buildSignedTransaction({
+    inputs: plan.inputs,
+    outputs: plan.txOutputs,
+  });
 
   if (!previewOnly) {
     const response = await fetch(`${BLOCKSTREAM_API_BASE}/tx`, {
@@ -1055,13 +1162,317 @@ export const sendBitcoinTransaction = async ({
 
   return {
     txid,
-    fee,
-    feeRate: fee / vsize,
-    change,
-    changeAddress: changeAddressInfo,
-    usedInputs: selected.map((item) => item.source ?? { address: item.address }),
-    changeBelowDust,
+    fee: plan.fee,
+    feeRate: plan.fee / vsize,
+    change: plan.change,
+    changeAddress: plan.changeDetails
+      ? {
+          address: plan.changeDetails.address,
+          index: plan.changeDetails.index,
+          change: true,
+          type: plan.changeDetails.type,
+        }
+      : null,
+    usedInputs: plan.selectedUtxos.map((item) => item.source ?? { address: item.address }),
+    changeBelowDust: plan.changeBelowDust,
     rawTransaction,
     preview: previewOnly,
+  };
+};
+
+export const createPsbtTransaction = async ({
+  accountXpub,
+  masterFingerprint,
+  recipientAddress,
+  amountBtc,
+  feeRate,
+  addressType = DEFAULT_ADDRESS_TYPE,
+  receivingAddresses = [],
+  changeAddresses = [],
+  nextChangeIndex = 0,
+}) => {
+  if (typeof accountXpub !== 'string' || !accountXpub.trim()) {
+    throw new Error('Account xpub invalido.');
+  }
+
+  const plan = await prepareTransactionTemplate({
+    seedPhrase: null,
+    accountXpub: accountXpub.trim(),
+    recipientAddress,
+    amountBtc,
+    feeRate,
+    addressType,
+    receivingAddresses,
+    changeAddresses,
+    nextChangeIndex,
+  });
+
+  const providedFingerprint = fingerprintHexToBuffer(masterFingerprint ?? '');
+  let fallbackFingerprint = null;
+  if (!providedFingerprint) {
+    try {
+      const node = HDKey.fromExtendedKey(accountXpub.trim());
+      const parentHex = node.parentFingerprint.toString(16).padStart(8, '0');
+      fallbackFingerprint = Buffer.from(parentHex, 'hex');
+    } catch (error) {
+      fallbackFingerprint = null;
+    }
+  }
+
+  const fingerprintBuffer = providedFingerprint ?? fallbackFingerprint ?? Buffer.alloc(4, 0);
+
+  const psbt = new bitcoin.Psbt({ network: BITCOIN_NETWORK });
+
+  plan.inputs.forEach((input) => {
+    psbt.addInput({
+      hash: input.txid,
+      index: input.vout,
+      sequence: input.sequence ?? DEFAULT_SEQUENCE,
+      witnessUtxo: {
+        script: Buffer.from(input.outputScript),
+        value: input.value,
+      },
+      bip32Derivation: [
+        {
+          masterFingerprint: fingerprintBuffer,
+          path: input.path,
+          pubkey: Buffer.from(input.publicKey),
+        },
+      ],
+    });
+  });
+
+  plan.outputs.forEach((output) => {
+    const outputData = {
+      script: Buffer.from(output.script),
+      value: output.value,
+    };
+
+    if (output.isChange && output.publicKey) {
+      outputData.bip32Derivation = [
+        {
+          masterFingerprint: fingerprintBuffer,
+          path: output.path,
+          pubkey: Buffer.from(output.publicKey),
+        },
+      ];
+    }
+
+    psbt.addOutput(outputData);
+  });
+
+  return {
+    psbtBase64: psbt.toBase64(),
+    fee: plan.fee,
+    virtualSize: plan.virtualSize,
+    feeRate: plan.virtualSize > 0 ? plan.fee / plan.virtualSize : 0,
+    change: plan.change,
+    changeAddress: plan.changeDetails
+      ? {
+          address: plan.changeDetails.address,
+          index: plan.changeDetails.index,
+          change: true,
+          type: plan.changeDetails.type,
+        }
+      : null,
+    changeBelowDust: plan.changeBelowDust,
+    amountSat: plan.amountSat,
+    totalInputValue: plan.totalInputValue,
+    inputs: plan.inputs.map((input) => ({
+      txid: input.txid,
+      vout: input.vout,
+      value: input.value,
+      address: input.address,
+      change: input.change,
+      index: input.index,
+      type: input.type,
+      path: input.path,
+    })),
+    outputs: plan.outputs.map((output) => ({
+      value: output.value,
+      address: output.address ?? null,
+      isChange: Boolean(output.isChange),
+      path: output.path ?? null,
+    })),
+    selectedUtxos: plan.selectedUtxos.map((item) => ({
+      txid: item.txid,
+      vout: item.vout,
+      value: item.value,
+      address: item.address,
+      source: item.source,
+    })),
+  };
+};
+
+const decodePsbt = (psbtBase64) => {
+  if (typeof psbtBase64 !== 'string' || !psbtBase64.trim()) {
+    throw new Error('PSBT invalida.');
+  }
+
+  try {
+    return bitcoin.Psbt.fromBase64(psbtBase64.trim(), { network: BITCOIN_NETWORK });
+  } catch (error) {
+    throw new Error('PSBT invalida ou corrompida.');
+  }
+};
+
+export const parsePsbtDetails = (psbtBase64) => {
+  const psbt = decodePsbt(psbtBase64);
+
+  const inputs = psbt.txInputs.map((input, index) => {
+    const inputData = psbt.data.inputs[index] ?? {};
+    const witnessUtxo = inputData.witnessUtxo;
+    if (!witnessUtxo || typeof witnessUtxo.value !== 'number') {
+      throw new Error(`Entrada ${index + 1} da PSBT sem dados de UTXO.`);
+    }
+
+    const derivation =
+      Array.isArray(inputData.bip32Derivation) && inputData.bip32Derivation.length
+        ? inputData.bip32Derivation[0]
+        : null;
+
+    return {
+      txid: bytesToHex(reverseBytes(Uint8Array.from(input.hash))),
+      vout: input.index,
+      sequence: input.sequence ?? DEFAULT_SEQUENCE,
+      value: witnessUtxo.value,
+      path: derivation?.path ?? null,
+      masterFingerprint: derivation?.masterFingerprint
+        ? bytesToHex(Uint8Array.from(derivation.masterFingerprint))
+        : null,
+      isSigned: Array.isArray(inputData.partialSig) && inputData.partialSig.length > 0,
+    };
+  });
+
+  const totalInput = inputs.reduce((sum, item) => sum + item.value, 0);
+
+  const outputs = psbt.txOutputs.map((output, index) => {
+    let address = null;
+    try {
+      address = bitcoin.address.fromOutputScript(Buffer.from(output.script), BITCOIN_NETWORK);
+    } catch (error) {
+      address = null;
+    }
+
+    const outputData = psbt.data.outputs[index] ?? {};
+    const derivation =
+      Array.isArray(outputData.bip32Derivation) && outputData.bip32Derivation.length
+        ? outputData.bip32Derivation[0]
+        : null;
+
+    return {
+      value: output.value,
+      address,
+      isChange: Boolean(derivation),
+      path: derivation?.path ?? null,
+    };
+  });
+
+  const totalOutput = outputs.reduce((sum, item) => sum + item.value, 0);
+  const fee = totalInput - totalOutput;
+  const virtualSize = estimateFee(psbt.txInputs.length, psbt.txOutputs.length, 1);
+  const feeRate = virtualSize > 0 ? fee / virtualSize : 0;
+  const fullySigned = psbt.data.inputs.every(
+    (input) => Array.isArray(input?.partialSig) && input.partialSig.length > 0,
+  );
+
+  return {
+    inputs,
+    outputs,
+    totalInput,
+    totalOutput,
+    fee,
+    virtualSize,
+    feeRate,
+    fullySigned,
+  };
+};
+
+export const signPsbtWithSeedPhrase = (psbtBase64, seedPhrase) => {
+  if (!Array.isArray(seedPhrase) || !seedPhrase.length) {
+    throw new Error('Frase semente invalida.');
+  }
+
+  const mnemonic = seedPhrase.join(' ');
+  const seed = mnemonicToSeedSync(mnemonic);
+  const master = HDKey.fromMasterSeed(seed);
+  const psbt = decodePsbt(psbtBase64);
+
+  psbt.data.inputs.forEach((input, index) => {
+    if (Array.isArray(input.partialSig) && input.partialSig.length) {
+      return; // ja assinado
+    }
+
+    const derivation =
+      Array.isArray(input.bip32Derivation) && input.bip32Derivation.length
+        ? input.bip32Derivation[0]
+        : null;
+
+    if (!derivation?.path) {
+      throw new Error(`Entrada ${index + 1} sem caminho BIP32 para derivacao.`);
+    }
+
+    const node = master.derive(derivation.path);
+    if (!node?.privateKey) {
+      throw new Error(`Falha ao derivar chave privada para ${derivation.path}.`);
+    }
+
+    const privateKey = node.privateKey;
+    const publicKey = node.publicKey ?? secp256k1.getPublicKey(privateKey, true);
+
+    psbt.signInput(index, {
+      publicKey: Buffer.from(publicKey),
+      sign: (hash) => Buffer.from(secp256k1.sign(hash, privateKey).toDERRawBytes()),
+    });
+  });
+
+  try {
+    psbt.validateSignaturesOfAllInputs();
+  } catch (error) {
+    throw new Error(error?.message || 'Falha ao validar assinaturas da PSBT.');
+  }
+
+  return psbt.toBase64();
+};
+
+export const finalizeSignedPsbt = (psbtBase64) => {
+  const psbt = decodePsbt(psbtBase64);
+
+  try {
+    psbt.finalizeAllInputs();
+  } catch (error) {
+    throw new Error(error?.message || 'PSBT nao esta completamente assinada.');
+  }
+
+  const transaction = psbt.extractTransaction();
+
+  return {
+    psbtBase64: psbt.toBase64(),
+    txHex: transaction.toHex(),
+    txid: transaction.getId(),
+    virtualSize: transaction.virtualSize(),
+  };
+};
+
+export const broadcastSignedPsbt = async (psbtBase64) => {
+  const { txHex, txid, virtualSize } = finalizeSignedPsbt(psbtBase64);
+
+  const response = await fetch(`${BLOCKSTREAM_API_BASE}/tx`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain',
+    },
+    body: txHex,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    throw new Error(errorBody || `Falha ao transmitir a transacao (${response.status}).`);
+  }
+
+  return {
+    txid,
+    txHex,
+    virtualSize,
   };
 };
