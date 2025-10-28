@@ -6,8 +6,6 @@ import { ripemd160 } from '@noble/hashes/ripemd160';
 import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { Buffer } from 'buffer';
-import bs58check from 'bs58check';
-
 if (typeof globalThis.Buffer === 'undefined') {
   globalThis.Buffer = Buffer;
 }
@@ -41,6 +39,111 @@ export const MIN_CHANGE_VALUE = 546; // dust threshold in satoshis
 const DEFAULT_TX_VERSION = 2;
 const DEFAULT_SEQUENCE = 0xffffffff;
 const SIGHASH_ALL = 0x01;
+
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const BASE58_MAP = (() => {
+  const map = {};
+  for (let i = 0; i < BASE58_ALPHABET.length; i += 1) {
+    map[BASE58_ALPHABET[i]] = i;
+  }
+  return map;
+})();
+
+const bytesEqual = (a, b) => {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const base58Decode = (value) => {
+  const input = value.trim();
+  if (!input) {
+    return new Uint8Array(0);
+  }
+
+  let num = 0n;
+  for (let i = 0; i < input.length; i += 1) {
+    const char = input[i];
+    const digit = BASE58_MAP[char];
+    if (digit === undefined) {
+      throw new Error(`Caractere base58 invalido: ${char}`);
+    }
+    num = num * 58n + BigInt(digit);
+  }
+
+  const bytes = [];
+  while (num > 0n) {
+    bytes.push(Number(num % 256n));
+    num /= 256n;
+  }
+  const bytesArray = Uint8Array.from(bytes.reverse());
+
+  let leadingZeros = 0;
+  for (let i = 0; i < input.length && input[i] === '1'; i += 1) {
+    leadingZeros += 1;
+  }
+
+  if (leadingZeros === 0) {
+    return bytesArray;
+  }
+
+  const result = new Uint8Array(leadingZeros + bytesArray.length);
+  result.set(bytesArray, leadingZeros);
+  return result;
+};
+
+const base58Encode = (data) => {
+  if (!data?.length) {
+    return '';
+  }
+
+  let num = 0n;
+  for (let i = 0; i < data.length; i += 1) {
+    num = num * 256n + BigInt(data[i]);
+  }
+
+  let encoded = '';
+  while (num > 0n) {
+    const rem = Number(num % 58n);
+    encoded = BASE58_ALPHABET[rem] + encoded;
+    num /= 58n;
+  }
+
+  let leadingZeros = 0;
+  for (let i = 0; i < data.length && data[i] === 0; i += 1) {
+    leadingZeros += 1;
+  }
+
+  return '1'.repeat(leadingZeros) + encoded;
+};
+
+const base58CheckDecode = (value) => {
+  const payload = base58Decode(value);
+  if (payload.length < 4) {
+    throw new Error('xpub invalido ou corrompido.');
+  }
+
+  const data = payload.slice(0, payload.length - 4);
+  const checksum = payload.slice(payload.length - 4);
+  const expected = sha256d(data).slice(0, 4);
+
+  if (!bytesEqual(checksum, expected)) {
+    throw new Error('xpub invalido ou corrompido.');
+  }
+
+  return data;
+};
+
+const base58CheckEncode = (data) => {
+  const checksum = sha256d(data).slice(0, 4);
+  return base58Encode(concatBytes(data, checksum));
+};
 
 const hash160 = (data) => ripemd160(sha256(data));
 
@@ -173,8 +276,8 @@ const deriveNodeFromAccountXpub = (accountXpub, { change, index }) => {
     throw new Error('Account xpub invalido. Verifique se esta completo e pertence a esta carteira.');
   }
 
-  const branchNode = accountNode.derive(change ? 1 : 0);
-  const child = branchNode.derive(index);
+  const branchNode = accountNode.deriveChild(change ? 1 : 0);
+  const child = branchNode.deriveChild(index);
 
   if (!child?.publicKey) {
     throw new Error('Unable to derive public key from account xpub');
