@@ -3398,10 +3398,20 @@ const HomeScreen = ({ navigation }) => {
         <View style={styles.modalBackdrop}>
           <Animated.View
             style={[styles.modalCard, { transform: signModalPosition.getTranslateTransform() }]}
-            {...signModalPanResponder.panHandlers}
           >
-            <Text style={styles.modalTitle}>Assinar PSBT</Text>
-            {isScanning && scanMode === 'psbt' ? (
+            <View
+              style={styles.modalDragHandleContainer}
+              {...signModalPanResponder.panHandlers}
+            >
+              <View style={styles.modalDragHandle} />
+            </View>
+            <ScrollView
+              style={styles.signModalScroll}
+              contentContainerStyle={styles.signModalContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.modalTitle}>Assinar PSBT</Text>
+              {isScanning && scanMode === 'psbt' ? (
               <>
                 {CameraComponent && cameraComponentProps ? (
                   <>
@@ -3615,6 +3625,7 @@ const HomeScreen = ({ navigation }) => {
                 </TouchableOpacity>
               </>
             )}
+            </ScrollView>
           </Animated.View>
         </View>
       </Modal>

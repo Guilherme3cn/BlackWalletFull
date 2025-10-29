@@ -359,6 +359,26 @@ export const homeStyles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.sm,
   },
+  signModalScroll: {
+    width: '100%',
+  },
+  signModalContent: {
+    width: '100%',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingBottom: spacing.md,
+  },
+  modalDragHandleContainer: {
+    width: '100%',
+    alignItems: 'center',
+    paddingBottom: spacing.sm,
+  },
+  modalDragHandle: {
+    width: 48,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.muted,
+  },
   modalFallback: {
     color: colors.mutedForeground,
     textAlign: 'center',
