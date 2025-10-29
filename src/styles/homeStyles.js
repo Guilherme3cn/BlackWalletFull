@@ -282,6 +282,7 @@ export const homeStyles = StyleSheet.create({
   },
   modalCard: {
     width: '100%',
+    maxHeight: '90%',
     backgroundColor: colors.secondary,
     borderRadius: radius.lg,
     padding: spacing.lg,
@@ -343,10 +344,20 @@ export const homeStyles = StyleSheet.create({
     textAlign: 'center',
   },
   receiveModalQr: {
-    width: 240,
-    height: 240,
+    width: '100%',
+    maxWidth: 280,
+    aspectRatio: 1,
     borderRadius: radius.sm,
     backgroundColor: colors.background,
+  },
+  psbtModalScroll: {
+    width: '100%',
+  },
+  psbtModalContent: {
+    width: '100%',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingBottom: spacing.sm,
   },
   modalFallback: {
     color: colors.mutedForeground,
@@ -709,4 +720,7 @@ export const homeStyles = StyleSheet.create({
     fontSize: typography.small,
   },
 });
+
+
+
 

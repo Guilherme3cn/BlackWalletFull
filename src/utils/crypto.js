@@ -145,6 +145,19 @@ const base58CheckEncode = (data) => {
   return base58Encode(concatBytes(data, checksum));
 };
 
+const ADDRESS_RATE_LIMIT_MS = 1200;
+let nextAddressRequestTime = 0;
+
+const scheduleAddressRequest = async () => {
+  const now = Date.now();
+  const delay = nextAddressRequestTime - now;
+  if (delay > 0) {
+    await wait(delay);
+  }
+  const baseTime = Math.max(now, nextAddressRequestTime);
+  nextAddressRequestTime = baseTime + ADDRESS_RATE_LIMIT_MS;
+};
+
 const fingerprintHexToBuffer = (value) => {
   if (typeof value !== 'string') {
     return null;
@@ -484,13 +497,28 @@ export const fetchAddressSummary = async (address) => {
     throw new Error('Address must be provided.');
   }
 
-  const response = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}`);
+  await scheduleAddressRequest();
+
+  const userAgent = 'blackvault-wallet/1.0 (+https://github.com/blackvault)';
+  const response = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}`, {
+    headers: {
+      'User-Agent': userAgent,
+      Accept: 'application/json',
+    },
+  });
 
   if (!response.ok) {
     const error = new Error(`Balance request failed with status ${response.status}`);
     error.status = response.status;
     if (response.status === 429) {
       error.code = 'RATE_LIMITED';
+      const retryHeader = response.headers?.get('retry-after');
+      const retrySeconds = retryHeader ? Number(retryHeader) : NaN;
+      if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+        error.retryAfterMs = retrySeconds * 1000;
+      }
+      const penalty = Math.max(error.retryAfterMs ?? 4000, ADDRESS_RATE_LIMIT_MS * 2);
+      nextAddressRequestTime = Date.now() + penalty;
     }
     throw error;
   }
@@ -545,7 +573,7 @@ export const getWalletAddressesBalance = async (addresses = []) => {
 
   const summaries = [];
   const MAX_ATTEMPTS = 4;
-  const BASE_DELAY_MS = 500;
+  const BASE_DELAY_MS = 800;
 
   for (const entry of addresses) {
     let attempt = 0;
@@ -553,7 +581,8 @@ export const getWalletAddressesBalance = async (addresses = []) => {
       try {
         const summary = await fetchAddressSummary(entry.address);
         summaries.push(summary);
-        await wait(120);
+        const cooldown = 50 + Math.floor(Math.random() * 100);
+        await wait(cooldown);
         break;
       } catch (error) {
         attempt += 1;
@@ -561,8 +590,11 @@ export const getWalletAddressesBalance = async (addresses = []) => {
           (error?.status === 429 || error?.code === 'RATE_LIMITED') && attempt < MAX_ATTEMPTS;
 
         if (retryable) {
-          const backoff = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-          await wait(backoff);
+          const retryAfter = Number(error?.retryAfterMs ?? 0);
+          const exponential = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          const backoff = Math.max(exponential, retryAfter);
+          const jitter = Math.floor(Math.random() * 400);
+          await wait(backoff + jitter);
           continue;
         }
 
@@ -1422,12 +1454,29 @@ export const signPsbtWithSeedPhrase = (psbtBase64, seedPhrase) => {
 
     psbt.signInput(index, {
       publicKey: Buffer.from(publicKey),
-      sign: (hash) => Buffer.from(secp256k1.sign(hash, privateKey).toDERRawBytes()),
+      sign: (hash) => {
+        const signature = secp256k1.sign(hash, privateKey).normalizeS();
+        return Buffer.from(signature.toCompactRawBytes());
+      },
     });
   });
 
+  const verifySignature = (pubkey, hash, signature) => {
+    try {
+      const compact =
+        signature.length === 64
+          ? signature
+          : secp256k1.Signature.fromDER(signature).toCompactRawBytes();
+      return secp256k1.verify(compact, hash, pubkey);
+    } catch (error) {
+      return false;
+    }
+  };
+
   try {
-    psbt.validateSignaturesOfAllInputs();
+    psbt.validateSignaturesOfAllInputs((pubkey, hash, signature) =>
+      verifySignature(pubkey, hash, signature),
+    );
   } catch (error) {
     throw new Error(error?.message || 'Falha ao validar assinaturas da PSBT.');
   }
@@ -1476,3 +1525,4 @@ export const broadcastSignedPsbt = async (psbtBase64) => {
     virtualSize,
   };
 };
+

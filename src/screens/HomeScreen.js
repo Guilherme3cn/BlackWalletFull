@@ -2,9 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   ActivityIndicator,
+  Animated,
   Image,
   Linking,
   Modal,
+  PanResponder,
   ScrollView,
   Text,
   TextInput,
@@ -139,6 +141,7 @@ const PASSWORD_KEY = 'wallet-password';
 const FEE_REFRESH_INTERVAL = 60000;
 const ESTIMATED_TX_SIZE_VBYTES = 110;
 const FEE_API_URL = 'https://mempool.space/api/v1/fees/recommended';
+const BALANCE_REFRESH_MIN_MS = 15000;
 
 const fetchBtcPrice = async () => {
   const response = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,brl');
@@ -189,6 +192,7 @@ const HomeScreen = ({ navigation }) => {
   const [psbtStatus, setPsbtStatus] = useState(null);
   const [psbtDraft, setPsbtDraft] = useState(null);
   const [creatingPsbt, setCreatingPsbt] = useState(false);
+  const [psbtPercentage, setPsbtPercentage] = useState(null);
   const [signedPsbtInput, setSignedPsbtInput] = useState('');
   const [broadcastStatus, setBroadcastStatus] = useState(null);
   const [broadcastingPsbt, setBroadcastingPsbt] = useState(false);
@@ -197,6 +201,28 @@ const HomeScreen = ({ navigation }) => {
   const [signedPsbt, setSignedPsbt] = useState(null);
   const [signStatus, setSignStatus] = useState(null);
   const [signingPsbt, setSigningPsbt] = useState(false);
+  const signModalPosition = useRef(new Animated.ValueXY()).current;
+  const signModalPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) =>
+          Math.abs(gestureState.dx) > 6 || Math.abs(gestureState.dy) > 6,
+        onPanResponderGrant: () => {
+          signModalPosition.extractOffset();
+        },
+        onPanResponderMove: Animated.event(
+          [null, { dx: signModalPosition.x, dy: signModalPosition.y }],
+          { useNativeDriver: false },
+        ),
+        onPanResponderRelease: () => {
+          signModalPosition.flattenOffset();
+        },
+        onPanResponderTerminate: () => {
+          signModalPosition.flattenOffset();
+        },
+      }),
+    [signModalPosition],
+  );
   const [scanMode, setScanMode] = useState(null);
   const [receiveModalVisible, setReceiveModalVisible] = useState(false);
   const [cameraModule, setCameraModule] = useState(null);
@@ -213,6 +239,7 @@ const HomeScreen = ({ navigation }) => {
   const sendStatusTimeoutRef = useRef(null);
   const walletDataRef = useRef(null);
   const [pendingIncomingSat, setPendingIncomingSat] = useState(0);
+  const lastBalanceFetchRef = useRef(0);
 
   const seedPhrase = walletData?.seedPhrase ?? [];
   const hasPendingIncoming = useMemo(() => pendingIncomingSat > 0, [pendingIncomingSat]);
@@ -235,13 +262,8 @@ const HomeScreen = ({ navigation }) => {
   const isPrimaryActionDisabled = isFullMode
     ? hasPendingIncoming || !canInitiateDirectSend
     : isOnlineProtectedMode
-    ? !isOnline || !walletData?.accountXpub || hasPendingIncoming
+    ? !isOnline || hasPendingIncoming
     : !hasSeedAvailable;
-  const handlePrimaryAction = isFullMode
-    ? handleSendBitcoin
-    : isOnlineProtectedMode
-    ? handleOpenPsbtModal
-    : handleOpenSignModal;
   const modeInfoMessage = useMemo(() => {
     if (isOnlineProtectedMode) {
       return 'Modo online protegido: utilize este aparelho para sincronizar saldos e montar PSBTs.';
@@ -442,28 +464,45 @@ const HomeScreen = ({ navigation }) => {
             results.set(index, entry);
           }
 
-          if (!summaries[entry.address]) {
-            try {
-              summaries[entry.address] = await fetchAddressSummary(entry.address);
-            } catch (error) {
-              console.error(`Erro descobrindo endereco ${entry.address}`, error);
-              summaries[entry.address] = {
-                address: entry.address,
-                balance: 0,
-                balanceSat: 0,
-                pendingReceivedSat: 0,
-                totalReceivedSat: 0,
-                hasActivity: false,
-              };
+          let summary = summaries[entry.address];
+          if (!summary) {
+            let attempts = 0;
+            const maxAttempts = 3;
+            let retryDelay = 1000;
+            while (attempts < maxAttempts) {
+              attempts += 1;
+              try {
+                summary = await fetchAddressSummary(entry.address);
+                break;
+              } catch (error) {
+                const isRateLimited =
+                  error?.status === 429 || error?.code === 'RATE_LIMITED' || /429/.test(error?.message ?? '');
+                if (!isRateLimited || attempts >= maxAttempts) {
+                  console.error(`Erro descobrindo endereco ${entry.address}`, error);
+                  summary = {
+                    address: entry.address,
+                    balance: 0,
+                    balanceSat: 0,
+                    pendingReceivedSat: 0,
+                    totalReceivedSat: 0,
+                    hasActivity: false,
+                  };
+                  break;
+                }
+                const retryAfter = Number(error?.retryAfterMs ?? 0);
+                const delay = Math.max(retryAfter, retryDelay);
+                await wait(delay + Math.floor(Math.random() * 500));
+                retryDelay *= 2;
+              }
             }
+            summaries[entry.address] = summary;
           }
 
-          const summary = summaries[entry.address];
           const hasActivity =
-            Number(summary.balanceSat ?? 0) > 0 ||
-            Number(summary.pendingReceivedSat ?? 0) > 0 ||
-            Number(summary.totalReceivedSat ?? 0) > 0 ||
-            summary.hasActivity;
+            Number(summary?.balanceSat ?? 0) > 0 ||
+            Number(summary?.pendingReceivedSat ?? 0) > 0 ||
+            Number(summary?.totalReceivedSat ?? 0) > 0 ||
+            summary?.hasActivity;
 
           if (hasActivity && !entry.used) {
             entry.used = true;
@@ -596,6 +635,15 @@ const HomeScreen = ({ navigation }) => {
   useEffect(() => {
     walletDataRef.current = walletData;
   }, [walletData]);
+
+  useEffect(() => {
+    if (!signModalVisible) {
+      signModalPosition.stopAnimation(() => {
+        signModalPosition.setValue({ x: 0, y: 0 });
+        signModalPosition.setOffset({ x: 0, y: 0 });
+      });
+    }
+  }, [signModalPosition, signModalVisible]);
 
   useEffect(() => {
     if (!canUseNetwork && isOnline) {
@@ -1027,14 +1075,24 @@ const HomeScreen = ({ navigation }) => {
     [feeOptions, feeProfile],
   );
 
-  const cameraSupport = useMemo(() => {
+  const resolvedCameraModule = useMemo(() => {
     if (!cameraModule) {
       return null;
     }
+    if (cameraModule.default && typeof cameraModule.default === 'object') {
+      return { ...cameraModule, ...cameraModule.default };
+    }
+    return cameraModule;
+  }, [cameraModule]);
 
-    if (cameraModule.CameraView) {
+  const cameraSupport = useMemo(() => {
+    if (!resolvedCameraModule) {
+      return null;
+    }
+
+    if (resolvedCameraModule.CameraView) {
       return {
-        Component: cameraModule.CameraView,
+        Component: resolvedCameraModule.CameraView,
         getProps: (handler) => ({
           style: styles.qrScanner,
           facing: 'back',
@@ -1044,17 +1102,17 @@ const HomeScreen = ({ navigation }) => {
       };
     }
 
-    if (cameraModule.Camera) {
-      const LegacyCamera = cameraModule.Camera;
+    if (resolvedCameraModule.Camera) {
+      const LegacyCamera = resolvedCameraModule.Camera;
       const legacyType =
-        cameraModule.CameraType?.back ??
-        cameraModule.Camera.Constants?.Type?.back ??
-        cameraModule.Constants?.Type?.back ??
+        resolvedCameraModule.CameraType?.back ??
+        resolvedCameraModule.Camera.Constants?.Type?.back ??
+        resolvedCameraModule.Constants?.Type?.back ??
         undefined;
 
       const qrType =
-        cameraModule?.BarCodeScanner?.Constants?.BarCodeType?.qr ??
-        cameraModule?.Camera?.Constants?.BarCodeType?.qr ??
+        resolvedCameraModule?.BarCodeScanner?.Constants?.BarCodeType?.qr ??
+        resolvedCameraModule?.Camera?.Constants?.BarCodeType?.qr ??
         'qr';
 
       return {
@@ -1069,7 +1127,7 @@ const HomeScreen = ({ navigation }) => {
     }
 
     return null;
-  }, [cameraModule]);
+  }, [resolvedCameraModule]);
 
   const showFeedback = useCallback((type, message) => {
     setFeedback({ type, message, timestamp: Date.now() });
@@ -1212,6 +1270,7 @@ const HomeScreen = ({ navigation }) => {
     setPsbtStatus(null);
     setPsbtDraft(null);
     setCreatingPsbt(false);
+    setPsbtPercentage(null);
     setSignedPsbtInput('');
     setBroadcastStatus(null);
     setBroadcastingPsbt(false);
@@ -1230,11 +1289,16 @@ const HomeScreen = ({ navigation }) => {
 
   const handleClosePsbtModal = useCallback(() => {
     setPsbtModalVisible(false);
+    setIsScanning(false);
+    setScanMode(null);
+    setIsScanning(false);
+    setScanMode(null);
     setPsbtAddress('');
     setPsbtAmount('');
     setPsbtStatus(null);
     setPsbtDraft(null);
     setCreatingPsbt(false);
+    setPsbtPercentage(null);
     setSignedPsbtInput('');
     setBroadcastStatus(null);
     setBroadcastingPsbt(false);
@@ -1493,7 +1557,7 @@ const HomeScreen = ({ navigation }) => {
       };
 
       await persistWalletData(updatedWallet);
-      await fetchWalletBalance(updatedWallet);
+      await fetchWalletBalance(updatedWallet, { force: true });
 
       const successMessage = `Transacao transmitida com sucesso. TXID: ${txid}`;
       setBroadcastStatus({ type: 'success', message: successMessage });
@@ -1634,19 +1698,38 @@ const HomeScreen = ({ navigation }) => {
       });
   }, [showFeedback, signedPsbt]);
 
+  const handlePrimaryAction = useMemo(() => {
+    if (isFullMode) {
+      return handleSendBitcoin;
+    }
+    if (isOnlineProtectedMode) {
+      return handleOpenPsbtModal;
+    }
+    return handleOpenSignModal;
+  }, [handleOpenPsbtModal, handleOpenSignModal, handleSendBitcoin, isFullMode, isOnlineProtectedMode]);
+
   const loadCameraModule = useCallback(async () => {
     if (cameraModuleRef.current) {
       return cameraModuleRef.current;
     }
 
     try {
-      const module = await import('expo-camera');
-      cameraModuleRef.current = module;
-      setCameraModule(module);
-      return module;
-    } catch (error) {
-      console.error('Erro ao carregar modulo da camera', error);
-      throw error;
+      const module = require('expo-camera');
+      const resolved = module?.default ? { ...module, ...module.default } : module;
+      cameraModuleRef.current = resolved;
+      setCameraModule(resolved);
+      return resolved;
+    } catch (syncError) {
+      try {
+        const module = await import('expo-camera');
+        const resolved = module?.default ? { ...module, ...module.default } : module;
+        cameraModuleRef.current = resolved;
+        setCameraModule(resolved);
+        return resolved;
+      } catch (error) {
+        console.error('Erro ao carregar modulo da camera', error);
+        throw error;
+      }
     }
   }, []);
 
@@ -1726,6 +1809,28 @@ const HomeScreen = ({ navigation }) => {
         } catch (error) {
           showFeedback('error', error?.message ?? 'PSBT invalida.');
         }
+        return;
+      }
+
+      if (scanMode === 'psbtRecipient') {
+        let extractedAddress = data.trim();
+
+        if (extractedAddress.toLowerCase().startsWith('bitcoin:')) {
+          const withoutScheme = extractedAddress.slice('bitcoin:'.length);
+          const [addressPart] = withoutScheme.split('?');
+          extractedAddress = addressPart?.trim() ?? '';
+        }
+
+        if (!extractedAddress) {
+          showFeedback('error', 'QR Code nao contem um endereco valido.');
+          return;
+        }
+
+        setPsbtAddress(extractedAddress);
+        setPsbtStatus(null);
+        setScanMode(null);
+        setIsScanning(false);
+        showFeedback('success', 'Endereco do destinatario carregado via QR Code.');
         return;
       }
 
@@ -1922,6 +2027,21 @@ const HomeScreen = ({ navigation }) => {
     [balance],
   );
 
+  const handleSelectPsbtPercentage = useCallback(
+    (value) => {
+      setPsbtPercentage(value);
+      setPsbtStatus(null);
+      if (!balance || balance <= 0) {
+        setPsbtAmount('0');
+        return;
+      }
+
+      const amount = balance * value;
+      setPsbtAmount(formatBitcoinAmount(amount));
+    },
+    [balance],
+  );
+
   const handleSubmitSend = useCallback(async () => {
     if (sendingTransaction) {
       return;
@@ -2066,7 +2186,7 @@ const HomeScreen = ({ navigation }) => {
       };
 
       await persistWalletData(updatedWallet);
-      await fetchWalletBalance(updatedWallet);
+      await fetchWalletBalance(updatedWallet, { force: true });
     };
 
     const broadcastTransaction = async () => {
@@ -2181,7 +2301,9 @@ const HomeScreen = ({ navigation }) => {
   }, [balance, btcPriceUsd]);
 
   const fetchWalletBalance = useCallback(
-    async (targetWallet = walletDataRef.current) => {
+    async (targetWallet = walletDataRef.current, options = {}) => {
+      const force = Boolean(options.force);
+
       if (!targetWallet) {
         return;
       }
@@ -2195,6 +2317,14 @@ const HomeScreen = ({ navigation }) => {
         return;
       }
 
+      const now = Date.now();
+
+      if (!force && now - lastBalanceFetchRef.current < BALANCE_REFRESH_MIN_MS) {
+        return;
+      }
+
+      lastBalanceFetchRef.current = now;
+
       const trackedAddresses = [
         ...(Array.isArray(targetWallet.receivingAddresses) ? targetWallet.receivingAddresses : []),
         ...(Array.isArray(targetWallet.changeAddresses) ? targetWallet.changeAddresses : []),
@@ -2205,6 +2335,7 @@ const HomeScreen = ({ navigation }) => {
         setPendingIncomingSat(0);
         setAddressSummaries({});
         zeroBalanceMapRef.current = {};
+        lastBalanceFetchRef.current = Date.now();
         return;
       }
 
@@ -2411,17 +2542,18 @@ const HomeScreen = ({ navigation }) => {
 
         if (isRateLimited) {
           showFeedback('error', 'Limite de requisicoes atingido. Aguarde alguns instantes e tente novamente.');
-          return;
-        }
-
-        if (isOnline) {
+        } else if (isOnline) {
           showFeedback('error', 'Nao foi possivel atualizar o saldo no momento. Verifique sua conexao.');
         } else {
           showFeedback('error', 'Erro ao atualizar saldo. Verifique sua conexao.');
         }
-        setAddressSummaries({});
-        setPendingIncomingSat(0);
-        zeroBalanceMapRef.current = {};
+        if (!isRateLimited) {
+          setAddressSummaries({});
+          setPendingIncomingSat(0);
+          zeroBalanceMapRef.current = {};
+        }
+      } finally {
+        lastBalanceFetchRef.current = Date.now();
       }
     },
     [isOnline, persistWalletData, deriveAddressDetails, showFeedback],
@@ -2465,7 +2597,7 @@ const HomeScreen = ({ navigation }) => {
         });
 
         await persistWalletData(initialState);
-        await fetchWalletBalance(initialState);
+        await fetchWalletBalance(initialState, { force: true });
 
         if (!skipFeedback) {
           showFeedback('success', 'Nova carteira gerada. Guarde a frase semente com seguranca.');
@@ -2544,7 +2676,7 @@ const HomeScreen = ({ navigation }) => {
       }
 
       await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
-      await fetchWalletBalance(normalized);
+      await fetchWalletBalance(normalized, { force: true });
     } catch (error) {
       Alert.alert('Erro', 'Nao foi possivel carregar os dados da carteira.');
       console.error('Erro carregando carteira', error);
@@ -2878,8 +3010,43 @@ const HomeScreen = ({ navigation }) => {
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Gerar PSBT</Text>
-            {psbtDraft ? (
+            <ScrollView
+              style={styles.psbtModalScroll}
+              contentContainerStyle={styles.psbtModalContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.modalTitle}>Gerar PSBT</Text>
+              {isScanning && (scanMode === 'psbtRecipient' || scanMode === 'broadcast') ? (
+              <>
+                {CameraComponent && cameraComponentProps ? (
+                  <>
+                    <View style={styles.qrScannerContainer}>
+                      <CameraComponent {...cameraComponentProps} />
+                    </View>
+                    <Text style={styles.qrScannerHint}>
+                      {scanMode === 'psbtRecipient'
+                        ? 'Aponte para o QR Code do destinatario'
+                        : 'Aponte para o QR Code da PSBT assinada'}
+                    </Text>
+                  </>
+                ) : (
+                  <View style={styles.qrScannerFallback}>
+                    <Feather name="camera-off" size={36} color={colors.mutedForeground} />
+                    <Text style={styles.qrScannerFallbackText}>
+                      {cameraModuleError ??
+                        'Camera indisponivel. Verifique se o dispositivo suporta leitura de QR code.'}
+                    </Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.qrScannerCancel}
+                  onPress={handleCancelScan}
+                >
+                  <Text style={styles.qrScannerCancelText}>Cancelar leitura</Text>
+                </TouchableOpacity>
+              </>
+            ) : psbtDraft ? (
               <>
                 {psbtStatus?.message ? (
                   <Text
@@ -3066,6 +3233,16 @@ const HomeScreen = ({ navigation }) => {
                     {psbtStatus.message}
                   </Text>
                 ) : null}
+                <View style={[styles.sendModalOptions, { marginTop: 12 }]}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.modalOptionButton}
+                    onPress={() => handleScanQrCode('psbtRecipient')}
+                  >
+                    <Feather name="camera" size={18} color={colors.primaryText} />
+                    <Text style={styles.modalOptionButtonText}>Ler QR Code</Text>
+                  </TouchableOpacity>
+                </View>
                 <TextInput
                   value={psbtAddress}
                   onChangeText={(value) => {
@@ -3083,6 +3260,7 @@ const HomeScreen = ({ navigation }) => {
                   onChangeText={(value) => {
                     setPsbtAmount(value);
                     setPsbtStatus(null);
+                    setPsbtPercentage(null);
                   }}
                   placeholder="Quantidade de BTC"
                   placeholderTextColor={colors.mutedForeground}
@@ -3091,6 +3269,35 @@ const HomeScreen = ({ navigation }) => {
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
+                <View style={styles.percentageRow}>
+                  {percentageOptions.map((option) => {
+                    const isActive = psbtPercentage === option.value;
+                    const isDisabled = !balance || balance <= 0;
+                    return (
+                      <TouchableOpacity
+                        key={`psbt-${option.label}`}
+                        activeOpacity={0.85}
+                        disabled={isDisabled}
+                        style={[
+                          styles.percentageButton,
+                          isActive ? styles.percentageButtonActive : null,
+                          isDisabled ? styles.percentageButtonDisabled : null,
+                        ]}
+                        onPress={() => handleSelectPsbtPercentage(option.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.percentageButtonText,
+                            isActive ? styles.percentageButtonTextActive : null,
+                            isDisabled ? styles.percentageButtonTextDisabled : null,
+                          ]}
+                        >
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
                 <View style={styles.feeOptionsRow}>
                   {feeOptions.map((option) => {
                     const isActive = option.key === feeProfile;
@@ -3178,6 +3385,7 @@ const HomeScreen = ({ navigation }) => {
                 </TouchableOpacity>
               </>
             )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -3188,7 +3396,10 @@ const HomeScreen = ({ navigation }) => {
         onRequestClose={handleCloseSignModal}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <Animated.View
+            style={[styles.modalCard, { transform: signModalPosition.getTranslateTransform() }]}
+            {...signModalPanResponder.panHandlers}
+          >
             <Text style={styles.modalTitle}>Assinar PSBT</Text>
             {isScanning && scanMode === 'psbt' ? (
               <>
@@ -3404,7 +3615,7 @@ const HomeScreen = ({ navigation }) => {
                 </TouchableOpacity>
               </>
             )}
-          </View>
+          </Animated.View>
         </View>
       </Modal>
       <Modal
@@ -3729,6 +3940,10 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
+
+
+
+
 
 
 
