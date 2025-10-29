@@ -172,7 +172,7 @@ const HomeScreen = ({ navigation }) => {
   const [loadingWallet, setLoadingWallet] = useState(true);
   const [priceRefreshing, setPriceRefreshing] = useState(false);
   const [feedback, setFeedback] = useState(null);
-  const [isOnline, setIsOnline] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [generatingWallet, setGeneratingWallet] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [sendModalVisible, setSendModalVisible] = useState(false);
@@ -239,10 +239,12 @@ const HomeScreen = ({ navigation }) => {
   const sendStatusTimeoutRef = useRef(null);
   const walletDataRef = useRef(null);
   const [pendingIncomingSat, setPendingIncomingSat] = useState(0);
+  const [pendingPsbtSat, setPendingPsbtSat] = useState(0);
   const lastBalanceFetchRef = useRef(0);
 
   const seedPhrase = walletData?.seedPhrase ?? [];
   const hasPendingIncoming = useMemo(() => pendingIncomingSat > 0, [pendingIncomingSat]);
+  const hasPendingPsbt = useMemo(() => pendingPsbtSat > 0, [pendingPsbtSat]);
   const walletMode = walletData?.mode ?? WALLET_MODES.FULL;
   const isFullMode = walletMode === WALLET_MODES.FULL;
   const isOnlineProtectedMode = walletMode === WALLET_MODES.ONLINE_PROTECTED;
@@ -262,7 +264,7 @@ const HomeScreen = ({ navigation }) => {
   const isPrimaryActionDisabled = isFullMode
     ? hasPendingIncoming || !canInitiateDirectSend
     : isOnlineProtectedMode
-    ? !isOnline || hasPendingIncoming
+    ? !isOnline || hasPendingIncoming || hasPendingPsbt
     : !hasSeedAvailable;
   const modeInfoMessage = useMemo(() => {
     if (isOnlineProtectedMode) {
@@ -430,7 +432,16 @@ const HomeScreen = ({ navigation }) => {
           accountXpub: !canDeriveWithSeed ? accountXpub : undefined,
         });
 
-      const scanBranch = async (changeFlag) => {
+      const buildEmptySummary = (addr) => ({
+        address: addr,
+        balance: 0,
+        balanceSat: 0,
+        pendingReceivedSat: 0,
+        totalReceivedSat: 0,
+        hasActivity: false,
+      });
+
+      const scanBranch = async (changeFlag, branchState = { rateLimited: false, aborted: false }) => {
         const results = new Map();
         const summaries = {};
 
@@ -444,6 +455,16 @@ const HomeScreen = ({ navigation }) => {
             used: Boolean(item.used),
           });
         });
+
+        if (branchState.rateLimited && branchState.aborted) {
+          existing.forEach((item) => {
+            if (!summaries[item.address]) {
+              summaries[item.address] = buildEmptySummary(item.address);
+            }
+          });
+          const deduped = [...results.values()].sort((a, b) => a.index - b.index);
+          return { addresses: deduped, summaries };
+        }
 
         let index = 0;
         let emptyStreak = 0;
@@ -465,37 +486,29 @@ const HomeScreen = ({ navigation }) => {
           }
 
           let summary = summaries[entry.address];
+          let rateLimitTriggered = false;
           if (!summary) {
-            let attempts = 0;
-            const maxAttempts = 3;
-            let retryDelay = 1000;
-            while (attempts < maxAttempts) {
-              attempts += 1;
-              try {
-                summary = await fetchAddressSummary(entry.address);
-                break;
-              } catch (error) {
-                const isRateLimited =
-                  error?.status === 429 || error?.code === 'RATE_LIMITED' || /429/.test(error?.message ?? '');
-                if (!isRateLimited || attempts >= maxAttempts) {
-                  console.error(`Erro descobrindo endereco ${entry.address}`, error);
-                  summary = {
-                    address: entry.address,
-                    balance: 0,
-                    balanceSat: 0,
-                    pendingReceivedSat: 0,
-                    totalReceivedSat: 0,
-                    hasActivity: false,
-                  };
-                  break;
-                }
-                const retryAfter = Number(error?.retryAfterMs ?? 0);
-                const delay = Math.max(retryAfter, retryDelay);
-                await wait(delay + Math.floor(Math.random() * 500));
-                retryDelay *= 2;
+            try {
+              summary = await fetchAddressSummary(entry.address);
+            } catch (error) {
+              const message = typeof error?.message === 'string' ? error.message : '';
+              const isRateLimitError =
+                error?.code === 'RATE_LIMITED' || /limite de requisicoes/i.test(message);
+              if (isRateLimitError) {
+                console.warn(`Limite da API ao descobrir endereco ${entry.address}`, error);
+                branchState.rateLimited = true;
+                branchState.aborted = true;
+                rateLimitTriggered = true;
+              } else {
+                console.error(`Erro descobrindo endereco ${entry.address}`, error);
               }
+              summary = buildEmptySummary(entry.address);
             }
             summaries[entry.address] = summary;
+
+            if (rateLimitTriggered) {
+              break;
+            }
           }
 
           const hasActivity =
@@ -520,7 +533,7 @@ const HomeScreen = ({ navigation }) => {
 
         const deduped = [...results.values()].sort((a, b) => a.index - b.index);
 
-        if (!changeFlag) {
+        if (!changeFlag && !branchState.rateLimited) {
           const nextIndex =
             lastActiveIndex >= 0
               ? lastActiveIndex + 1
@@ -537,22 +550,20 @@ const HomeScreen = ({ navigation }) => {
               change: false,
               used: false,
             });
-            summaries[derived.address] = {
-              address: derived.address,
-              balance: 0,
-              balanceSat: 0,
-              pendingReceivedSat: 0,
-              totalReceivedSat: 0,
-              hasActivity: false,
-            };
+            summaries[derived.address] = buildEmptySummary(derived.address);
           }
         }
 
         return { addresses: deduped, summaries };
       };
 
-      const receivingScan = await scanBranch(false);
-      const changeScan = await scanBranch(true);
+      const receivingState = { rateLimited: false, aborted: false };
+      const receivingScan = await scanBranch(false, receivingState);
+      const changeState = {
+        rateLimited: receivingState.rateLimited,
+        aborted: receivingState.aborted,
+      };
+      const changeScan = await scanBranch(true, changeState);
 
       const summaryMap = { ...receivingScan.summaries, ...changeScan.summaries };
 
@@ -572,6 +583,8 @@ const HomeScreen = ({ navigation }) => {
         0,
       );
 
+      const encounteredRateLimit = receivingState.rateLimited || changeState.rateLimited;
+
       return {
         wallet: {
           ...baseWallet,
@@ -579,10 +592,11 @@ const HomeScreen = ({ navigation }) => {
           changeAddresses,
           receivingIndex,
           changeIndex,
-          discoveryComplete: true,
+          discoveryComplete: !encounteredRateLimit,
         },
         summaryMap,
         pendingReceivedSat,
+        rateLimited: encounteredRateLimit,
       };
     },
     [deriveAddressDetails, fetchAddressSummary],
@@ -775,9 +789,19 @@ const HomeScreen = ({ navigation }) => {
     [walletData, resolveDisplayAddress],
   );
 
+  const pendingPsbtBtc = useMemo(
+    () => pendingPsbtSat / SATOSHIS_IN_BTC,
+    [pendingPsbtSat],
+  );
+
   const pendingIncomingBtc = useMemo(
     () => pendingIncomingSat / SATOSHIS_IN_BTC,
     [pendingIncomingSat],
+  );
+
+  const availableBalance = useMemo(
+    () => Math.max(balance - pendingPsbtBtc, 0),
+    [balance, pendingPsbtBtc],
   );
 
   const addressBalances = useMemo(() => {
@@ -1251,6 +1275,11 @@ const HomeScreen = ({ navigation }) => {
       return;
     }
 
+    if (pendingPsbtSat > 0) {
+      showFeedback('info', 'Existe uma PSBT pendente. Conclua ou cancele antes de gerar outra.');
+      return;
+    }
+
     if (!walletData?.accountXpub) {
       showFeedback('error', 'xpub da conta indisponivel neste dispositivo.');
       return;
@@ -1285,9 +1314,11 @@ const HomeScreen = ({ navigation }) => {
     pendingIncomingBtc,
     showFeedback,
     walletData,
+    pendingPsbtSat,
   ]);
 
   const handleClosePsbtModal = useCallback(() => {
+    setPendingPsbtSat(0);
     setPsbtModalVisible(false);
     setIsScanning(false);
     setScanMode(null);
@@ -1347,9 +1378,9 @@ const HomeScreen = ({ navigation }) => {
       return;
     }
 
-    if (totalToSpend > balance) {
+    if (totalToSpend > availableBalance) {
       const message = `Saldo insuficiente. Disponivel: ${formatBitcoinAmount(
-        balance,
+        availableBalance,
       )} BTC. Necessario: ${formatBitcoinAmount(totalToSpend)} BTC (valor + taxa).`;
       showFeedback('error', message);
       setPsbtStatus({ type: 'error', message });
@@ -1367,6 +1398,27 @@ const HomeScreen = ({ navigation }) => {
 
     setPsbtStatus(null);
     setCreatingPsbt(true);
+
+    const finalizePsbtDraft = (result) => {
+      const amountSat =
+        Number.isFinite(Number(result.amountSat))
+          ? Number(result.amountSat)
+          : Math.round(Number(result.amountBtc ?? 0) * SATOSHIS_IN_BTC);
+      const feeSat = Number.isFinite(Number(result.fee)) ? Number(result.fee) : 0;
+      const reservedSat = Math.max(amountSat + feeSat, 0);
+      setPendingPsbtSat(reservedSat);
+      setPsbtDraft({
+        ...result,
+        recipientAddress: trimmedAddress,
+        amountBtc: parsedPsbtAmount,
+        feeRate,
+        nextChangeIndex,
+      });
+      setPsbtStatus({
+        type: 'success',
+        message: 'PSBT gerada. Escaneie com o dispositivo offline para assinar.',
+      });
+    };
 
     const nextChangeIndex =
       Number.isInteger(walletData.changeIndex) && walletData.changeIndex >= 0
@@ -1386,17 +1438,35 @@ const HomeScreen = ({ navigation }) => {
         nextChangeIndex,
       });
 
-      setPsbtDraft({
-        ...result,
-        recipientAddress: trimmedAddress,
-        amountBtc: parsedPsbtAmount,
-        feeRate,
-        nextChangeIndex,
-      });
-      setPsbtStatus({
-        type: 'success',
-        message: 'PSBT gerada. Escaneie com o dispositivo offline para assinar.',
-      });
+      if (result.changeBelowDust > 0) {
+        const dustBtc = result.changeBelowDust / SATOSHIS_IN_BTC;
+        Alert.alert(
+          'Troco abaixo do minimo',
+          `O troco restante (${formatBitcoinAmount(dustBtc)} BTC) e inferior ao minimo de ${MIN_CHANGE_VALUE} sats e sera incorporado na taxa. Deseja continuar mesmo assim?`,
+          [
+            {
+              text: 'Cancelar',
+              style: 'cancel',
+              onPress: () => {
+                setPsbtStatus({
+                  type: 'error',
+                  message: 'Geracao de PSBT cancelada. Ajuste o valor para evitar perda de troco.',
+                });
+              },
+            },
+            {
+              text: 'Continuar',
+              style: 'destructive',
+              onPress: () => {
+                finalizePsbtDraft(result);
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      finalizePsbtDraft(result);
     } catch (error) {
       console.error('Erro ao gerar PSBT', error);
       const message = error?.message ?? 'Nao foi possivel gerar a PSBT.';
@@ -1406,7 +1476,7 @@ const HomeScreen = ({ navigation }) => {
       setCreatingPsbt(false);
     }
   }, [
-    balance,
+    availableBalance,
     creatingPsbt,
     feeRate,
     hasPendingIncoming,
@@ -1562,6 +1632,7 @@ const HomeScreen = ({ navigation }) => {
       const successMessage = `Transacao transmitida com sucesso. TXID: ${txid}`;
       setBroadcastStatus({ type: 'success', message: successMessage });
       showFeedback('success', successMessage);
+      setPendingPsbtSat(0);
       setPsbtDraft(null);
       setSignedPsbtInput('');
       setTimeout(() => {
@@ -2031,15 +2102,15 @@ const HomeScreen = ({ navigation }) => {
     (value) => {
       setPsbtPercentage(value);
       setPsbtStatus(null);
-      if (!balance || balance <= 0) {
+      if (!availableBalance || availableBalance <= 0) {
         setPsbtAmount('0');
         return;
       }
 
-      const amount = balance * value;
+      const amount = availableBalance * value;
       setPsbtAmount(formatBitcoinAmount(amount));
     },
-    [balance],
+    [availableBalance],
   );
 
   const handleSubmitSend = useCallback(async () => {
@@ -2297,8 +2368,8 @@ const HomeScreen = ({ navigation }) => {
       return 0;
     }
 
-    return balance * btcPriceUsd;
-  }, [balance, btcPriceUsd]);
+    return availableBalance * btcPriceUsd;
+  }, [availableBalance, btcPriceUsd]);
 
   const fetchWalletBalance = useCallback(
     async (targetWallet = walletDataRef.current, options = {}) => {
@@ -2313,7 +2384,7 @@ const HomeScreen = ({ navigation }) => {
         return;
       }
 
-      if (!isOnline) {
+      if (!isOnline && !force) {
         return;
       }
 
@@ -2582,6 +2653,28 @@ const HomeScreen = ({ navigation }) => {
     }
   }, [canUseNetwork, isOnline, showFeedback]);
 
+  const handleRefreshWallet = useCallback(async () => {
+    if (!walletDataRef.current) {
+      showFeedback('error', 'Dados da carteira indisponiveis para atualizar.');
+      return;
+    }
+
+    if (!canUseNetwork) {
+      showFeedback('info', 'Atualize os dados utilizando o dispositivo online da carteira.');
+      return;
+    }
+
+    if (!isOnline) {
+      showFeedback('error', 'Ative o modo online para atualizar a carteira.');
+      return;
+    }
+
+    await Promise.allSettled([
+      fetchWalletBalance(walletDataRef.current, { force: true }),
+      refreshBtcPrice(),
+    ]);
+  }, [canUseNetwork, fetchWalletBalance, isOnline, refreshBtcPrice, showFeedback]);
+
   const regenerateWallet = useCallback(
     async (skipFeedback = false) => {
       try {
@@ -2663,6 +2756,12 @@ const HomeScreen = ({ navigation }) => {
           normalized = discovery.wallet;
           initialSummaries = discovery.summaryMap;
           initialPendingSat = discovery.pendingReceivedSat;
+          if (discovery.rateLimited) {
+            showFeedback(
+              'info',
+              'Limite de requisicoes da API atingido durante a sincronizacao. Tentaremos novamente em instantes.',
+            );
+          }
         } catch (discoveryError) {
           console.error('Erro ao descobrir enderecos utilizados', discoveryError);
         }
@@ -2676,14 +2775,16 @@ const HomeScreen = ({ navigation }) => {
       }
 
       await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
-      await fetchWalletBalance(normalized, { force: true });
+      fetchWalletBalance(normalized, { force: true }).catch((error) => {
+        console.error('Erro ao carregar saldo inicial', error);
+      });
     } catch (error) {
       Alert.alert('Erro', 'Nao foi possivel carregar os dados da carteira.');
       console.error('Erro carregando carteira', error);
     } finally {
       setLoadingWallet(false);
     }
-  }, [buildWalletState, discoverWalletUsage, fetchWalletBalance, regenerateWallet]);
+  }, [buildWalletState, discoverWalletUsage, fetchWalletBalance, regenerateWallet, showFeedback]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -2821,12 +2922,12 @@ const HomeScreen = ({ navigation }) => {
 
         <WalletCard
           address={address}
-          balance={balance}
+          balance={availableBalance}
           usdValue={usdValue}
           btcPrice={btcPrice}
           isRefreshing={priceRefreshing && canRefreshPrice}
           canRefreshPrice={canRefreshPrice}
-          onRefreshPrice={refreshBtcPrice}
+          onRefreshPrice={handleRefreshWallet}
         />
 
         {isOfflineProtectedMode ? (
@@ -3210,6 +3311,7 @@ const HomeScreen = ({ navigation }) => {
                     setSignedPsbtInput('');
                     setBroadcastStatus(null);
                     setBroadcastingPsbt(false);
+                    setPendingPsbtSat(0);
                   }}
                 >
                   <Text style={styles.modalCloseText}>Gerar outra PSBT</Text>

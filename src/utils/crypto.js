@@ -34,7 +34,8 @@ const HD_ADDRESS_TYPES = {
 export const DEFAULT_ADDRESS_TYPE = 'bech32';
 const BITCOIN_NETWORK = bitcoin.networks.bitcoin;
 const BLOCKSTREAM_API_BASE = 'https://blockstream.info/api';
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const USER_AGENT = 'blackvault-wallet/1.0 (+https://github.com/blackvault)';
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const MIN_CHANGE_VALUE = 546; // dust threshold in satoshis
 const DEFAULT_TX_VERSION = 2;
 const DEFAULT_SEQUENCE = 0xffffffff;
@@ -145,14 +146,46 @@ const base58CheckEncode = (data) => {
   return base58Encode(concatBytes(data, checksum));
 };
 
-const ADDRESS_RATE_LIMIT_MS = 1200;
+const ADDRESS_RATE_LIMIT_MS = 0;
+const ADDRESS_MAX_RETRIES = 3;
+const RATE_LIMIT_BASE_DELAY_MS = 1500;
+const RATE_LIMIT_MAX_DELAY_MS = 6000;
+const MAX_BACKOFF_MS = 30000;
+const MAX_RATE_LIMIT_ATTEMPTS = 5;
+const GLOBAL_MIN_API_INTERVAL_MS = 1200;
 let nextAddressRequestTime = 0;
+let nextApiSlotTime = 0;
+
+const canRetryAttempt = (attempt) => ADDRESS_MAX_RETRIES <= 0 || attempt < ADDRESS_MAX_RETRIES;
+
+const computeBackoffDelay = (attempt, retryAfterMs, { maxFallbackDelay = MAX_BACKOFF_MS } = {}) => {
+  const exponent = Math.max(attempt - 1, 0);
+  const exponential = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, exponent);
+  const fallbackDelay = Math.min(exponential, maxFallbackDelay);
+  const baseDelay =
+    Number.isFinite(retryAfterMs) && retryAfterMs > 0 ? retryAfterMs : fallbackDelay;
+  const jitter = Math.floor(Math.random() * 400);
+  return baseDelay + jitter;
+};
+
+const acquireApiSlot = async () => {
+  const now = Date.now();
+  const waitTime = nextApiSlotTime - now;
+  if (waitTime > 0) {
+    await delay(waitTime);
+  }
+  const base = Math.max(Date.now(), nextApiSlotTime);
+  nextApiSlotTime = base + GLOBAL_MIN_API_INTERVAL_MS;
+};
 
 const scheduleAddressRequest = async () => {
+  if (ADDRESS_RATE_LIMIT_MS <= 0) {
+    return;
+  }
   const now = Date.now();
-  const delay = nextAddressRequestTime - now;
-  if (delay > 0) {
-    await wait(delay);
+  const waitTime = nextAddressRequestTime - now;
+  if (waitTime > 0) {
+    await delay(waitTime);
   }
   const baseTime = Math.max(now, nextAddressRequestTime);
   nextAddressRequestTime = baseTime + ADDRESS_RATE_LIMIT_MS;
@@ -497,63 +530,125 @@ export const fetchAddressSummary = async (address) => {
     throw new Error('Address must be provided.');
   }
 
-  await scheduleAddressRequest();
+  let attempt = 1;
+  let rateLimitAttempts = 0;
 
-  const userAgent = 'blackvault-wallet/1.0 (+https://github.com/blackvault)';
-  const response = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}`, {
-    headers: {
-      'User-Agent': userAgent,
-      Accept: 'application/json',
-    },
-  });
+  while (true) {
+    await scheduleAddressRequest();
 
-  if (!response.ok) {
-    const error = new Error(`Balance request failed with status ${response.status}`);
-    error.status = response.status;
-    if (response.status === 429) {
-      error.code = 'RATE_LIMITED';
-      const retryHeader = response.headers?.get('retry-after');
-      const retrySeconds = retryHeader ? Number(retryHeader) : NaN;
-      if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
-        error.retryAfterMs = retrySeconds * 1000;
+    let response;
+    try {
+      await acquireApiSlot();
+      response = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}`, {
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: 'application/json',
+        },
+      });
+    } catch (networkError) {
+      if (!canRetryAttempt(attempt)) {
+        const error = new Error('Nao foi possivel consultar o saldo: rede indisponivel.');
+        error.cause = networkError;
+        throw error;
       }
-      const penalty = Math.max(error.retryAfterMs ?? 4000, ADDRESS_RATE_LIMIT_MS * 2);
-      nextAddressRequestTime = Date.now() + penalty;
+
+      const retryDelay = computeBackoffDelay(attempt);
+      await delay(retryDelay);
+      attempt += 1;
+      continue;
     }
-    throw error;
+
+    if (!response.ok) {
+      const error = new Error(`Falha ao consultar saldo (status ${response.status})`);
+      error.status = response.status;
+
+      const isRateLimited = response.status === 429;
+      const isServerError = response.status >= 500 && response.status < 600;
+
+      if (!isRateLimited) {
+        rateLimitAttempts = 0;
+      }
+
+      if (isRateLimited) {
+        error.code = 'RATE_LIMITED';
+        const retryHeader = response.headers?.get('retry-after');
+        const retrySeconds = retryHeader ? Number(retryHeader) : NaN;
+        if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+          error.retryAfterMs = retrySeconds * 1000;
+        }
+        error.message = 'Limite de requisicoes da API atingido. Tentando novamente...';
+        const penalty = Math.max(
+          error.retryAfterMs ?? RATE_LIMIT_BASE_DELAY_MS,
+          RATE_LIMIT_BASE_DELAY_MS,
+        );
+        nextAddressRequestTime = Date.now() + penalty;
+        nextApiSlotTime = Math.max(nextApiSlotTime, Date.now() + penalty);
+        rateLimitAttempts += 1;
+      }
+
+      if (isServerError) {
+        error.message = canRetryAttempt(attempt)
+          ? 'Servico da API temporariamente indisponivel. Tentando novamente...'
+          : 'Servico da API temporariamente indisponivel. Tente novamente em instantes.';
+      }
+
+      const shouldRetryRateLimited =
+        isRateLimited && rateLimitAttempts <= MAX_RATE_LIMIT_ATTEMPTS;
+      const shouldRetryServerError = isServerError && canRetryAttempt(attempt);
+
+      if (shouldRetryRateLimited || shouldRetryServerError) {
+        const retryDelay = isRateLimited
+          ? computeBackoffDelay(rateLimitAttempts, error.retryAfterMs, {
+              maxFallbackDelay: RATE_LIMIT_MAX_DELAY_MS,
+            })
+          : computeBackoffDelay(attempt, error.retryAfterMs);
+        await delay(retryDelay);
+        attempt += 1;
+        continue;
+      }
+
+      if (isRateLimited) {
+        error.message =
+          rateLimitAttempts > MAX_RATE_LIMIT_ATTEMPTS
+            ? 'Limite de requisicoes da API atingido repetidamente. Tente novamente em instantes.'
+            : 'Limite de requisicoes da API atingido. Tente novamente em alguns segundos.';
+      }
+
+      throw error;
+    }
+
+    const data = await response.json();
+    const chainStats = data?.chain_stats ?? {};
+    const mempoolStats = data?.mempool_stats ?? {};
+
+    const fundedChain = Number(chainStats.funded_txo_sum ?? 0);
+    const spentChain = Number(chainStats.spent_txo_sum ?? 0);
+    const fundedMempool = Number(mempoolStats.funded_txo_sum ?? 0);
+    const spentMempool = Number(mempoolStats.spent_txo_sum ?? 0);
+
+    const balanceSat = fundedChain + fundedMempool - (spentChain + spentMempool);
+    const totalReceivedSat = fundedChain + fundedMempool;
+    const totalSentSat = spentChain + spentMempool;
+    const hasActivity =
+      Number(chainStats.funded_txo_count ?? 0) > 0 ||
+      Number(mempoolStats.funded_txo_count ?? 0) > 0 ||
+      Number(chainStats.spent_txo_count ?? 0) > 0;
+    const pendingReceivedSat = Number(mempoolStats.funded_txo_sum ?? 0);
+    const pendingReceivedCount = Number(mempoolStats.funded_txo_count ?? 0);
+
+    return {
+      address,
+      balanceSat,
+      balance: balanceSat / SATOSHIS_IN_BTC,
+      totalReceivedSat,
+      totalSentSat,
+      hasActivity,
+      chainStats,
+      mempoolStats,
+      pendingReceivedSat,
+      pendingReceivedCount,
+    };
   }
-
-  const data = await response.json();
-  const chainStats = data?.chain_stats ?? {};
-  const mempoolStats = data?.mempool_stats ?? {};
-
-  const fundedChain = Number(chainStats.funded_txo_sum ?? 0);
-  const spentChain = Number(chainStats.spent_txo_sum ?? 0);
-  const fundedMempool = Number(mempoolStats.funded_txo_sum ?? 0);
-  const spentMempool = Number(mempoolStats.spent_txo_sum ?? 0);
-
-  const balanceSat = fundedChain + fundedMempool - (spentChain + spentMempool);
-  const totalReceivedSat = fundedChain + fundedMempool;
-  const totalSentSat = spentChain + spentMempool;
-  const hasActivity =
-    Number(chainStats.funded_txo_count ?? 0) > 0 ||
-    Number(mempoolStats.funded_txo_count ?? 0) > 0 ||
-    Number(chainStats.spent_txo_count ?? 0) > 0;
-  const pendingReceivedSat = Number(mempoolStats.funded_txo_sum ?? 0);
-  const pendingReceivedCount = Number(mempoolStats.funded_txo_count ?? 0);
-
-  return {
-    address,
-    balanceSat,
-    balance: balanceSat / SATOSHIS_IN_BTC,
-    totalReceivedSat,
-    totalSentSat,
-    hasActivity,
-    chainStats,
-    mempoolStats,
-    pendingReceivedSat,
-    pendingReceivedCount,
-  };
 };
 
 export const getAddressBalance = async (address) => {
@@ -582,7 +677,7 @@ export const getWalletAddressesBalance = async (addresses = []) => {
         const summary = await fetchAddressSummary(entry.address);
         summaries.push(summary);
         const cooldown = 50 + Math.floor(Math.random() * 100);
-        await wait(cooldown);
+        await delay(cooldown);
         break;
       } catch (error) {
         attempt += 1;
@@ -594,7 +689,7 @@ export const getWalletAddressesBalance = async (addresses = []) => {
           const exponential = BASE_DELAY_MS * Math.pow(2, attempt - 1);
           const backoff = Math.max(exponential, retryAfter);
           const jitter = Math.floor(Math.random() * 400);
-          await wait(backoff + jitter);
+          await delay(backoff + jitter);
           continue;
         }
 
@@ -629,21 +724,108 @@ const fetchAddressTransactions = async (address) => {
     };
   }
 
-  const confirmedResponse = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}/txs`);
-  if (!confirmedResponse.ok) {
-    throw new Error(`Falha ao buscar transacoes confirmadas (${confirmedResponse.status})`);
-  }
+  const fetchJsonWithRetry = async (url, { description }) => {
+    let attempt = 1;
+    let rateLimitAttempts = 0;
 
-  const confirmedData = await confirmedResponse.json();
+    while (true) {
+      let response;
+      try {
+        await acquireApiSlot();
+        response = await fetch(url, {
+          headers: {
+            'User-Agent': USER_AGENT,
+            Accept: 'application/json',
+          },
+        });
+      } catch (networkError) {
+        if (!canRetryAttempt(attempt)) {
+          const error = new Error(`Nao foi possivel ${description}: rede indisponivel.`);
+          error.cause = networkError;
+          throw error;
+        }
+
+        const retryDelay = computeBackoffDelay(attempt);
+        await delay(retryDelay);
+        attempt += 1;
+        continue;
+      }
+
+      if (!response.ok) {
+        const error = new Error(`${description} falhou (status ${response.status})`);
+        error.status = response.status;
+
+        const isRateLimited = response.status === 429;
+        const isServerError = response.status >= 500 && response.status < 600;
+
+        if (!isRateLimited) {
+          rateLimitAttempts = 0;
+        }
+
+        if (isRateLimited) {
+          error.code = 'RATE_LIMITED';
+          const retryHeader = response.headers?.get('retry-after');
+          const retrySeconds = retryHeader ? Number(retryHeader) : NaN;
+          if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
+            error.retryAfterMs = retrySeconds * 1000;
+          }
+          error.message = 'Limite de requisicoes da API atingido. Tentando novamente...';
+          const penalty = Math.max(
+            error.retryAfterMs ?? RATE_LIMIT_BASE_DELAY_MS,
+            RATE_LIMIT_BASE_DELAY_MS,
+          );
+          nextApiSlotTime = Math.max(nextApiSlotTime, Date.now() + penalty);
+          rateLimitAttempts += 1;
+        }
+
+        if (isServerError) {
+          error.message = canRetryAttempt(attempt)
+            ? 'Servico da API temporariamente indisponivel. Tentando novamente...'
+            : 'Servico da API temporariamente indisponivel. Tente novamente em instantes.';
+        }
+
+        const shouldRetryRateLimited =
+          isRateLimited && rateLimitAttempts <= MAX_RATE_LIMIT_ATTEMPTS;
+        const shouldRetryServerError = isServerError && canRetryAttempt(attempt);
+
+        if (shouldRetryRateLimited || shouldRetryServerError) {
+          const retryDelay = isRateLimited
+            ? computeBackoffDelay(rateLimitAttempts, error.retryAfterMs, {
+                maxFallbackDelay: RATE_LIMIT_MAX_DELAY_MS,
+              })
+            : computeBackoffDelay(attempt, error.retryAfterMs);
+          await delay(retryDelay);
+          attempt += 1;
+          continue;
+        }
+
+        if (isRateLimited) {
+          error.message =
+            rateLimitAttempts > MAX_RATE_LIMIT_ATTEMPTS
+              ? 'Limite de requisicoes da API atingido repetidamente. Tente novamente em instantes.'
+              : 'Limite de requisicoes da API atingido. Tente novamente em alguns segundos.';
+        }
+
+        throw error;
+      }
+
+      return response.json();
+    }
+  };
+
+  const confirmedData = await fetchJsonWithRetry(
+    `${BLOCKSTREAM_API_BASE}/address/${address}/txs`,
+    { description: 'buscar transacoes confirmadas' },
+  );
 
   let pendingData = [];
   try {
-    const pendingResponse = await fetch(`${BLOCKSTREAM_API_BASE}/address/${address}/txs/mempool`);
-    if (pendingResponse.ok) {
-      pendingData = await pendingResponse.json();
-    }
+    pendingData = await fetchJsonWithRetry(
+      `${BLOCKSTREAM_API_BASE}/address/${address}/txs/mempool`,
+      { description: 'buscar transacoes pendentes' },
+    );
   } catch (error) {
-    // Ignora falhas em consultas ao mempool, afinal a consulta confirmada já agrega histórico.
+    // Ignora falhas após tentativas no mempool para não interromper o fluxo.
   }
 
   return {
@@ -674,6 +856,9 @@ export const getWalletTransactionHistory = async (addresses = []) => {
       change: Boolean(item.change),
       index: Number.isInteger(item.index) ? item.index : 0,
       type: item.type ?? DEFAULT_ADDRESS_TYPE,
+      used: Boolean(item.used),
+      balanceSat: Number(item.balanceSat ?? item.balance ?? 0),
+      pendingSat: Number(item.pendingSat ?? item.pendingReceivedSat ?? 0),
     }));
 
   const uniqueMap = new Map();
@@ -684,10 +869,26 @@ export const getWalletTransactionHistory = async (addresses = []) => {
   });
 
   const uniqueAddresses = Array.from(uniqueMap.values());
-  const addressSet = new Set(uniqueAddresses.map((item) => item.address));
+  const activeAddresses = uniqueAddresses.filter(
+    (item) => item.used || item.pendingSat > 0 || item.balanceSat > 0,
+  );
+
+  let targetAddresses = activeAddresses;
+  if (!targetAddresses.length) {
+    const primaryReceiving = uniqueAddresses
+      .filter((item) => !item.change)
+      .sort((a, b) => (b.index ?? 0) - (a.index ?? 0))[0];
+    targetAddresses = primaryReceiving ? [primaryReceiving] : uniqueAddresses.slice(0, 1);
+  }
+
+  if (!targetAddresses.length) {
+    return [];
+  }
+
+  const addressSet = new Set(targetAddresses.map((item) => item.address));
   const txMap = new Map();
 
-  for (const entry of uniqueAddresses) {
+  for (const entry of targetAddresses) {
     try {
       const { confirmed, pending } = await fetchAddressTransactions(entry.address);
       const allTransactions = [...pending, ...confirmed];
@@ -814,6 +1015,7 @@ const selectUtxosForAmount = (utxos, targetAmount, feeRate) => {
         change = tentativeChange;
         fee = feeWithChange;
       } else if (tentativeChange >= 0) {
+        changeBelowDust = tentativeChange;
         change = 0;
         fee = feeWithChange;
       }
