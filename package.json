@@ -1,0 +1,39 @@
+{
+  "name": "blackvault-wallet",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "lint": "expo lint"
+  },
+  "dependencies": {
+    "@noble/hashes": "^1.4.0",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/native": "^6.1.17",
+    "@react-navigation/native-stack": "^6.9.26",
+    "@scure/base": "^1.1.9",
+    "@scure/bip32": "^1.4.0",
+    "@scure/bip39": "^1.2.0",
+    "bitcoinjs-lib": "^6.1.4",
+    "buffer": "^6.0.3",
+    "babel-preset-expo": "~54.0.0",
+    "expo": "~54.0.2",
+    "expo-camera": "~17.0.8",
+    "expo-clipboard": "~8.0.7",
+    "expo-crypto": "~15.0.7",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.4",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-get-random-values": "^1.11.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.5",
+    "babel-preset-expo": "~54.0.0"
+  }
+}

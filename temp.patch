@@ -1,0 +1,118 @@
+*** Begin Patch
+*** Update File: src/utils/crypto.js
+@@
+-const fetchAddressTransactions = async (address) => {
+-  if (!address) {
+-    return {
+-      confirmed: [],
+-      pending: [],
+-    };
+-  }
+-
+-  const confirmedResponse = await fetch(${BLOCKSTREAM_API_BASE}/address//txs);
+-  if (!confirmedResponse.ok) {
+-    throw new Error(Falha ao buscar transacoes confirmadas ());
+-  }
+-
+-  const confirmedData = await confirmedResponse.json();
+-
+-  let pendingData = [];
+-  try {
+-    const pendingResponse = await fetch(${BLOCKSTREAM_API_BASE}/address//txs/mempool);
+-    if (pendingResponse.ok) {
+-      pendingData = await pendingResponse.json();
+-    }
+-  } catch (error) {
+-    // Ignora falhas em consultas ao mempool, afinal a consulta confirmada j� agrega hist�rico.
+-  }
+-
+-  return {
+-    confirmed: Array.isArray(confirmedData) ? confirmedData : [],
+-    pending: Array.isArray(pendingData) ? pendingData : [],
+-  };
+-};
++const fetchAddressTransactions = async (address) => {
++  if (!address) {
++    return {
++      confirmed: [],
++      pending: [],
++    };
++  }
++
++  const fetchJsonWithRetry = async (url, { attempt = 1, description }) => {
++    let response;
++    try {
++      response = await fetch(url, {
++        headers: {
++          'User-Agent': USER_AGENT,
++          Accept: 'application/json',
++        },
++      });
++    } catch (networkError) {
++      if (attempt < ADDRESS_MAX_RETRIES) {
++        const retryDelay = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
++        await delay(retryDelay);
++        return fetchJsonWithRetry(url, { attempt: attempt + 1, description });
++      }
++      const error = new Error(Nao foi possivel : rede indisponivel.);
++      error.cause = networkError;
++      throw error;
++    }
++
++    if (!response.ok) {
++      const error = new Error(${description} falhou (status ));
++      error.status = response.status;
++      if (response.status === 429) {
++        error.code = 'RATE_LIMITED';
++        const retryHeader = response.headers?.get('retry-after');
++        const retrySeconds = retryHeader ? Number(retryHeader) : NaN;
++        if (Number.isFinite(retrySeconds) && retrySeconds > 0) {
++          error.retryAfterMs = retrySeconds * 1000;
++        }
++        error.message =
++          attempt < ADDRESS_MAX_RETRIES
++            ? 'Limite de requisicoes da API atingido. Tentando novamente...'
++            : 'Limite de requisicoes da API atingido. Tente novamente em alguns segundos.';
++      }
++      if (error.status >= 500 && error.status < 600) {
++        error.message =
++          attempt < ADDRESS_MAX_RETRIES
++            ? 'Servico de saldos temporariamente indisponivel. Tentando novamente...'
++            : 'Servico de saldos temporariamente indisponivel. Tente novamente em instantes.';
++      }
++      if (
++        (response.status === 429 || (response.status >= 500 && response.status < 600)) &&
++        attempt < ADDRESS_MAX_RETRIES
++      ) {
++        const retryDelay =
++          error.retryAfterMs ?? RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt - 1);
++        await delay(retryDelay);
++        return fetchJsonWithRetry(url, { attempt: attempt + 1, description });
++      }
++      throw error;
++    }
++
++    return response.json();
++  };
++
++  const confirmedData = await fetchJsonWithRetry(
++    ${BLOCKSTREAM_API_BASE}/address//txs,
++    { description: 'buscar transacoes confirmadas' },
++  );
++
++  let pendingData = [];
++  try {
++    pendingData = await fetchJsonWithRetry(
++      ${BLOCKSTREAM_API_BASE}/address//txs/mempool,
++      { description: 'buscar transacoes pendentes' },
++    );
++  } catch (error) {
++    // Ignora falhas ap�s tentativas no mempool para n�o interromper o fluxo.
++  }
++
++  return {
++    confirmed: Array.isArray(confirmedData) ? confirmedData : [],
++    pending: Array.isArray(pendingData) ? pendingData : [],
++  };
++};
+*** End Patch

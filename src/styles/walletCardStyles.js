@@ -1,0 +1,115 @@
+import { StyleSheet } from 'react-native';
+import { colors, radius, spacing, typography } from '../theme/colors';
+
+export const walletCardStyles = StyleSheet.create({
+  card: {
+    backgroundColor: '#4d4b4b56',
+    padding: 5,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#1A1A1A',
+    shadowColor: '#000',
+    shadowOpacity: 0.45,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 1,
+    width: '100%',
+    maxWidth: '100%',
+    alignSelf: 'center',
+  },
+  cardImage: {
+    borderRadius: radius.lg,
+    opacity: 0.95,
+    width: "105%",
+    height: '105%',
+    paddingRight: '115%',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  title: {
+    color: colors.foreground,
+    fontSize: typography.headline,
+    fontWeight: '700',
+  },
+  subtitle: {
+    color: '#D1D1D6',
+    fontSize: typography.small,
+    marginTop: spacing.xs,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+  },
+  iconButton: {
+    width: 40,
+    height: 30,
+    borderRadius: radius.sm,
+    backgroundColor: '#20202010',
+    borderWidth: 1,
+    borderColor: '#2e2e2e57',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginStart: -25,
+    marginTop: -70,
+    marginEnd: 20,
+  },
+  iconButtonDisabled: {
+    opacity: 0.4,
+  },
+  iconText: {
+    color: colors.primary,
+    fontSize: typography.body,
+    fontWeight: '600',
+  },
+  section: {
+    gap: spacing.xs,
+  },
+  label: {
+    color: colors.primary,
+    fontSize: typography.small,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  balanceText: {
+    color: colors.foreground,
+    fontSize: 32,
+    fontWeight: '700',
+  },
+  usdText: {
+    color: colors.mutedForeground,
+    fontSize: typography.small,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  addressText: {
+    flex: 1,
+    color: colors.foreground,
+    fontFamily: 'monospace',
+    fontSize: typography.small,
+    backgroundColor: colors.muted,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  copyButton: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  copyButtonText: {
+    color: colors.primary,
+    fontWeight: '600',
+  },
+});
