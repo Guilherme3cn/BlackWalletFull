@@ -1,10 +1,11 @@
 import 'react-native-gesture-handler';
 import 'react-native-get-random-values';
 import React, { useEffect } from 'react';
-import { View, Keyboard, StatusBar as RNStatusBar } from 'react-native';
+import { View, Keyboard, StatusBar as RNStatusBar, Platform } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import * as NavigationBar from 'expo-navigation-bar';
 import LoginScreen from './src/screens/LoginScreen';
 import SignScreen from './src/screens/sign/SignScreen';
 import HomeScreen from './src/screens/HomeScreen';
@@ -31,6 +32,11 @@ export default function App() {
   useEffect(() => {
     Keyboard.dismiss();
     RNStatusBar.setHidden(true, 'fade');
+    if (Platform.OS === 'android') {
+      // Mantém a barra de navegação do Android com a mesma cor de fundo do app
+      NavigationBar.setBackgroundColorAsync(colors.background).catch(() => {});
+      NavigationBar.setButtonStyleAsync('light').catch(() => {});
+    }
   }, []);
 
   return (

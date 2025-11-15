@@ -5,6 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
+    "icon": "./assets/images/icon.png",
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -21,6 +22,7 @@
         "barStyle": "light-content"
       },
       "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#000000"
       },
       "permissions": [
