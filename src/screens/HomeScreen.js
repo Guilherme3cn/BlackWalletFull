@@ -2894,9 +2894,11 @@ const HomeScreen = ({ navigation }) => {
       }
 
       await AsyncStorage.setItem(WALLET_DATA_KEY, JSON.stringify(normalized));
-      fetchWalletBalance(normalized, { force: true }).catch((error) => {
+      try {
+        await fetchWalletBalance(normalized, { force: true });
+      } catch (error) {
         console.error('Erro ao carregar saldo inicial', error);
-      });
+      }
     } catch (error) {
       Alert.alert('Erro', 'Nao foi possivel carregar os dados da carteira.');
       console.error('Erro carregando carteira', error);
@@ -4202,7 +4204,6 @@ const HomeScreen = ({ navigation }) => {
 };
 
 export default HomeScreen;
-
 
 
 
